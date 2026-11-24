@@ -24,7 +24,7 @@ import {
   updateMeetingMeta,
   updateMeetingPayload,
   updateTaskStatus,
-} from '../lib/firestoreVault';
+} from '../lib/workspaceStore';
 import {
   exportEncryptedArchiveBlob,
   loadDecryptedVideoBlob,
@@ -85,7 +85,17 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
   );
 
   useEffect(() => {
-    setNotesDraft(selectedMeeting?.payload.notes ?? '');
+    if (!selectedMeeting) {
+      setNotesDraft('');
+      setNotesSavedNotice(false);
+      return;
+    }
+    try {
+      const cached = sessionStorage.getItem(`cadence_notes_draft_${selectedMeeting.id}`);
+      setNotesDraft(cached !== null ? cached : selectedMeeting.payload.notes);
+    } catch {
+      setNotesDraft(selectedMeeting.payload.notes);
+    }
     setNotesSavedNotice(false);
   }, [selectedMeeting?.id, selectedMeeting?.payload.notes]);
 
@@ -242,6 +252,11 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
         },
         selectedMeeting
       );
+      try {
+        sessionStorage.removeItem(`cadence_notes_draft_${selectedMeeting.id}`);
+      } catch {
+        // Ignore
+      }
       setNotesSavedNotice(true);
     } finally {
       setSavingNotes(false);
@@ -430,8 +445,16 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                 rows={5}
                 value={notesDraft}
                 onChange={(e) => {
-                  setNotesDraft(e.target.value);
+                  const val = e.target.value;
+                  setNotesDraft(val);
                   setNotesSavedNotice(false);
+                  if (selectedMeeting) {
+                    try {
+                      sessionStorage.setItem(`cadence_notes_draft_${selectedMeeting.id}`, val);
+                    } catch {
+                      // Ignore
+                    }
+                  }
                 }}
                 placeholder="Write meeting notes here..."
                 className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:border-blue-600"

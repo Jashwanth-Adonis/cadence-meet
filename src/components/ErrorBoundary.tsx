@@ -24,16 +24,6 @@ export class ErrorBoundary extends React.Component<
 
   override render() {
     if (this.state.hasError) {
-      let friendly = this.state.message;
-      try {
-        const parsed = JSON.parse(this.state.message) as { error?: string; operationType?: string; path?: string };
-        if (parsed.error) {
-          friendly = `Database access error (${parsed.operationType ?? 'operation'} on ${parsed.path ?? 'resource'}): ${parsed.error}`;
-        }
-      } catch {
-        // Not JSON
-      }
-
       return (
         <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
           <div className="max-w-lg w-full bg-white border border-slate-200 rounded-xl p-8">
@@ -41,7 +31,9 @@ export class ErrorBoundary extends React.Component<
               <AlertTriangle className="w-5 h-5 shrink-0" />
               <h1 className="text-lg font-semibold text-slate-900">Workspace Recovery Required</h1>
             </div>
-            <p className="text-sm text-slate-600 leading-relaxed mb-6 break-words">{friendly}</p>
+            <p className="text-sm text-slate-600 leading-relaxed mb-6 break-words">
+              {this.state.message}
+            </p>
             <button
               type="button"
               onClick={() => window.location.reload()}

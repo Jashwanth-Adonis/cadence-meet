@@ -1,49 +1,40 @@
 import React, { useState } from 'react';
-import { signInWithPopup, signOut, type User } from 'firebase/auth';
-import { KeyRound, Lock, ShieldCheck, LogOut, ArrowRight } from 'lucide-react';
-import { auth, googleProvider } from '../firebase';
+import { KeyRound, Lock, ShieldCheck, RotateCcw } from 'lucide-react';
 import {
   createVaultVerifier,
   deriveMasterKey,
   generateSalt,
   verifyVaultPassphrase,
 } from '../lib/crypto';
-import { createFolder, createUserVaultProfile } from '../lib/firestoreVault';
+import {
+  createLocalFolder,
+  LOCAL_UID,
+  resetLocalVault,
+  saveLocalProfile,
+} from '../lib/localVaultDb';
 import type { UserVaultProfile } from '../types';
 
 interface VaultGateProps {
-  user: User | null;
   profile: UserVaultProfile | null;
   profileLoading: boolean;
   onUnlocked: (key: CryptoKey, profile: UserVaultProfile) => void;
+  onVaultReset: () => void;
 }
 
 export const VaultGate: React.FC<VaultGateProps> = ({
-  user,
   profile,
   profileLoading,
   onUnlocked,
+  onVaultReset,
 }) => {
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-
-  const handleGoogleSignIn = async () => {
-    setError('');
-    setBusy(true);
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to sign in with Google.');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const handleCreateVault = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
     if (passphrase.length < 8) {
       setError('Vault passphrase must be at least 8 characters long.');
       return;
@@ -60,27 +51,23 @@ export const VaultGate: React.FC<VaultGateProps> = ({
       const key = await deriveMasterKey(passphrase, salt);
       const verifier = await createVaultVerifier(key);
 
-      const newProfile: UserVaultProfile = {
-        uid: user.uid,
-        email: user.email ?? '',
-        displayName: user.displayName ?? 'Workspace Owner',
+      const newLocalProfile: UserVaultProfile = {
+        uid: LOCAL_UID,
+        email: 'local@device',
+        displayName: 'Local Device Vault',
         vaultSalt: salt,
         vaultVerifier: verifier,
         vaultEnabled: true,
       };
-
-      await createUserVaultProfile(newProfile);
-
-      // Seed starter folders for clean log organization
+      await saveLocalProfile(newLocalProfile);
       await Promise.all([
-        createFolder(user.uid, 'Product & Roadmap', 'Weekly product syncs and feature planning', '#2563EB'),
-        createFolder(user.uid, 'Engineering', 'Architecture reviews and sprint standups', '#0F766E'),
-        createFolder(user.uid, 'Client & External', 'Stakeholder reviews and partner calls', '#B45309'),
+        createLocalFolder('Work Meetings', 'Team syncs and project reviews', '#2563EB'),
+        createLocalFolder('Client Calls', 'External meetings and demos', '#0F766E'),
+        createLocalFolder('Archive', 'Completed project recordings', '#64748B'),
       ]);
-
-      onUnlocked(key, newProfile);
+      onUnlocked(key, newLocalProfile);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to initialize encrypted vault.');
+      setError(err instanceof Error ? err.message : 'Failed to initialize local encrypted vault.');
     } finally {
       setBusy(false);
     }
@@ -90,7 +77,7 @@ export const VaultGate: React.FC<VaultGateProps> = ({
     e.preventDefault();
     if (!profile) return;
     if (!passphrase) {
-      setError('Enter your vault passphrase to decrypt your workspace.');
+      setError('Enter your vault passphrase to sign in.');
       return;
     }
 
@@ -100,13 +87,29 @@ export const VaultGate: React.FC<VaultGateProps> = ({
       const key = await deriveMasterKey(passphrase, profile.vaultSalt);
       const ok = await verifyVaultPassphrase(key, profile.vaultVerifier);
       if (!ok) {
-        setError('Incorrect vault passphrase. Unable to verify decryption key.');
+        setError('Incorrect passphrase. Unable to unlock your local vault.');
         setBusy(false);
         return;
       }
       onUnlocked(key, profile);
     } catch {
-      setError('Failed to derive decryption key.');
+      setError('Failed to verify vault passphrase.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResetVault = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await resetLocalVault();
+      setPassphrase('');
+      setConfirmPassphrase('');
+      setConfirmReset(false);
+      onVaultReset();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reset local vault.');
     } finally {
       setBusy(false);
     }
@@ -122,24 +125,20 @@ export const VaultGate: React.FC<VaultGateProps> = ({
             </span>
             <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
               <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
-              AES-256-GCM E2EE
+              AES-256-GCM Local Vault
             </span>
           </div>
           <h1 className="font-display text-2xl font-semibold text-slate-900 tracking-tight">
-            {!user
-              ? 'Sign in to your meeting workspace'
-              : profileLoading
-              ? 'Checking encryption vault'
+            {profileLoading
+              ? 'Loading local vault'
               : profile
-              ? 'Unlock your encrypted vault'
-              : 'Create your encryption passphrase'}
+              ? 'Sign in with passphrase'
+              : 'Create your vault passphrase'}
           </h1>
           <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-            {!user
-              ? 'Record Google Meet sessions, encrypt recordings locally, organize logs in folders, and download video files directly.'
-              : profile
-              ? 'Your recorded videos, meeting notes, and tasks are encrypted client-side. Enter your passphrase to derive your session key.'
-              : 'Set a personal passphrase to derive your local AES-256-GCM encryption key. This passphrase never leaves your browser.'}
+            {profile
+              ? 'Your meeting videos, logs, and tasks are stored encrypted in this browser. Enter your passphrase to unlock.'
+              : 'Set a passphrase to encrypt all recorded meetings and logs locally on this device. Everything stays in your browser.'}
           </p>
         </div>
 
@@ -149,25 +148,15 @@ export const VaultGate: React.FC<VaultGateProps> = ({
           </div>
         )}
 
-        {!user ? (
-          <button
-            type="button"
-            onClick={handleGoogleSignIn}
-            disabled={busy}
-            className="w-full flex items-center justify-center gap-2.5 px-4 py-2.5 bg-slate-900 text-white text-sm font-medium rounded-lg hover:bg-slate-800 disabled:opacity-50 transition-colors"
-          >
-            <span>{busy ? 'Connecting Google Account...' : 'Continue with Google'}</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        ) : profileLoading ? (
+        {profileLoading ? (
           <div className="py-8 text-center text-sm text-slate-500">
-            Loading encrypted vault metadata...
+            Checking local browser storage...
           </div>
         ) : !profile ? (
           <form onSubmit={handleCreateVault} className="space-y-4">
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                Vault Passphrase (min. 8 characters)
+                Passphrase (min. 8 characters)
               </label>
               <div className="relative">
                 <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -175,10 +164,11 @@ export const VaultGate: React.FC<VaultGateProps> = ({
                   type="password"
                   value={passphrase}
                   onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="Enter a strong passphrase"
+                  placeholder="Create a passphrase"
                   className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                   required
                   minLength={8}
+                  autoFocus
                 />
               </div>
             </div>
@@ -204,22 +194,11 @@ export const VaultGate: React.FC<VaultGateProps> = ({
               disabled={busy}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
-              <span>{busy ? 'Deriving 256-bit Key...' : 'Initialize Encrypted Workspace'}</span>
+              <span>{busy ? 'Creating Local Vault...' : 'Create & Open Workspace'}</span>
             </button>
           </form>
         ) : (
           <form onSubmit={handleUnlockVault} className="space-y-4">
-            <div className="text-xs text-slate-500 flex items-center justify-between border-b border-slate-100 pb-3">
-              <span className="truncate">{user.email}</span>
-              <button
-                type="button"
-                onClick={() => signOut(auth)}
-                className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-medium whitespace-nowrap shrink-0"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                Switch account
-              </button>
-            </div>
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1.5">
                 Vault Passphrase
@@ -233,6 +212,7 @@ export const VaultGate: React.FC<VaultGateProps> = ({
                   placeholder="Enter passphrase to unlock"
                   className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                   required
+                  autoFocus
                 />
               </div>
             </div>
@@ -241,14 +221,51 @@ export const VaultGate: React.FC<VaultGateProps> = ({
               disabled={busy}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
-              <span>{busy ? 'Verifying Key...' : 'Unlock Workspace'}</span>
+              <span>{busy ? 'Unlocking...' : 'Unlock Workspace'}</span>
             </button>
+
+            <div className="pt-2">
+              {!confirmReset ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmReset(true)}
+                  className="text-xs text-slate-500 hover:text-slate-800 transition-colors"
+                >
+                  Forgot passphrase? Reset local vault
+                </button>
+              ) : (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2.5">
+                  <p className="text-xs text-slate-700 leading-relaxed">
+                    Resetting clears all encrypted recordings and logs stored in this browser so you can set a new passphrase.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleResetVault()}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-md hover:bg-red-700 disabled:opacity-50"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Confirm Reset</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setConfirmReset(false)}
+                      className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 text-xs font-medium rounded-md hover:bg-slate-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </form>
         )}
 
         <div className="mt-6 pt-5 border-t border-slate-100 text-xs text-slate-500 flex items-center justify-between">
-          <span>PBKDF2-SHA256 · 310k rounds</span>
-          <span>Zero-knowledge local keys</span>
+          <span>100% Local Browser Storage</span>
+          <span>PBKDF2 · AES-256-GCM</span>
         </div>
       </div>
     </div>

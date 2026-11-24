@@ -18,8 +18,16 @@ import {
   Lock,
   MonitorPlay,
 } from 'lucide-react';
-import { saveEncryptedVideo, triggerBlobDownload } from '../lib/vaultStorage';
-import { saveEncryptedMeeting } from '../lib/firestoreVault';
+import {
+  appendLiveCheckpointChunk,
+  clearLiveCheckpoint,
+  initLiveCheckpoint,
+  recoverLiveCheckpoint,
+  saveEncryptedVideo,
+  triggerBlobDownload,
+  updateLiveCheckpointMeta,
+} from '../lib/vaultStorage';
+import { saveEncryptedMeeting } from '../lib/workspaceStore';
 import {
   startActiveSpeakerCapture,
   type ActiveCaptureSession,
@@ -60,26 +68,52 @@ function checkDisplayCaptureAllowed(): { allowed: boolean; inIframe: boolean } {
   return { allowed: !inIframe, inIframe };
 }
 
+const DRAFT_STORAGE_KEY = 'cadence_capture_draft_v1';
+
+interface CaptureDraft {
+  meetUrlInput?: string;
+  meetingTitle?: string;
+  sessionNotes?: string;
+  selectedFolderId?: string;
+  framingMode?: SpeakerFramingMode;
+}
+
+function loadCaptureDraft(): CaptureDraft {
+  try {
+    const raw = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as CaptureDraft) : {};
+  } catch {
+    return {};
+  }
+}
+
 export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
   uid,
   masterKey,
   folders,
   onOpenMeeting,
 }) => {
+  const initialDraft = useMemo(() => loadCaptureDraft(), []);
+
   const [studioTab, setStudioTab] = useState<StudioTab>('live_bot');
-  const [meetUrlInput, setMeetUrlInput] = useState('');
+  const [meetUrlInput, setMeetUrlInput] = useState(initialDraft.meetUrlInput ?? '');
   const [validatedUrl, setValidatedUrl] = useState('');
   const [meetingCode, setMeetingCode] = useState('');
-  const [meetingTitle, setMeetingTitle] = useState('');
-  const [sessionNotes, setSessionNotes] = useState('');
-  const [selectedFolderId, setSelectedFolderId] = useState<string>(folders[0]?.id ?? '');
-  const [framingMode, setFramingMode] = useState<SpeakerFramingMode>('smart_focus');
+  const [meetingTitle, setMeetingTitle] = useState(initialDraft.meetingTitle ?? '');
+  const [sessionNotes, setSessionNotes] = useState(initialDraft.sessionNotes ?? '');
+  const [selectedFolderId, setSelectedFolderId] = useState<string>(
+    initialDraft.selectedFolderId ?? folders[0]?.id ?? ''
+  );
+  const [framingMode, setFramingMode] = useState<SpeakerFramingMode>(
+    initialDraft.framingMode ?? 'smart_focus'
+  );
   const [includeMic, setIncludeMic] = useState(true);
   const [includeCamPip, setIncludeCamPip] = useState(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [recoveredNotice, setRecoveredNotice] = useState('');
 
   const displayCapInfo = useMemo(() => checkDisplayCaptureAllowed(), []);
   const [tabCaptureBlocked, setTabCaptureBlocked] = useState(!displayCapInfo.allowed);
@@ -109,6 +143,84 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
   const captureRef = useRef<ActiveCaptureSession | null>(null);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const elapsedRef = useRef(0);
+  const chunkSeqRef = useRef(0);
+  const checkpointChainRef = useRef<Promise<void>>(Promise.resolve());
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        DRAFT_STORAGE_KEY,
+        JSON.stringify({
+          meetUrlInput,
+          meetingTitle,
+          sessionNotes,
+          selectedFolderId,
+          framingMode,
+        } satisfies CaptureDraft)
+      );
+    } catch {
+      // Ignore storage quota issues
+    }
+  }, [meetUrlInput, meetingTitle, sessionNotes, selectedFolderId, framingMode]);
+
+  useEffect(() => {
+    if (!isRecording && !saving) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isRecording, saving]);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const recovered = await recoverLiveCheckpoint(masterKey);
+        if (!active || !recovered) return;
+        const meetingId = generateDocId('mtg');
+        const savedBytes = await saveEncryptedVideo(meetingId, recovered.videoBlob, masterKey);
+        const payload: DecryptedMeetingPayload = {
+          title: `${recovered.meta.title} (Recovered)`,
+          meetUrl: recovered.meta.meetUrl,
+          notes: recovered.meta.notes,
+          bookmarks: [],
+        };
+        await saveEncryptedMeeting({
+          uid,
+          meetingId,
+          masterKey,
+          folderId: recovered.meta.folderId,
+          durationSec: recovered.durationSec,
+          fileSizeBytes: savedBytes,
+          hasLocalVideo: true,
+          videoMimeType: recovered.videoBlob.type || recovered.meta.mimeType || 'video/webm',
+          tags: ['recovered'],
+          payload,
+        });
+        await clearLiveCheckpoint();
+        if (!active) return;
+        const videoUrl = URL.createObjectURL(recovered.videoBlob);
+        setLastCompleted({
+          meetingId,
+          title: payload.title,
+          videoBlob: recovered.videoBlob,
+          videoUrl,
+          videoMimeType: recovered.videoBlob.type || recovered.meta.mimeType,
+          durationSec: recovered.durationSec,
+        });
+        setRecoveredNotice(
+          `Recovered an interrupted recording ("${payload.title}") from your local cache and saved it to Meeting Logs.`
+        );
+      } catch {
+        // Ignore corrupt partial checkpoint
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [masterKey, uid]);
 
   useEffect(() => {
     if (!selectedFolderId && folders.length > 0) {
@@ -129,33 +241,73 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
   }, [lastCompleted]);
 
   const validateMeetLink = async (): Promise<string | null> => {
-    if (!meetUrlInput.trim()) {
+    const rawUrl = meetUrlInput.trim();
+    if (!rawUrl) {
       setErrorMsg(
         'Paste a Google Meet link (e.g. https://meet.google.com/abc-defg-hij) to start recording.'
       );
       return null;
     }
-    const res = await fetch('/api/meet/validate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ meetUrl: meetUrlInput.trim() }),
-    });
-    const data = (await res.json()) as {
-      valid?: boolean;
-      normalizedUrl?: string;
-      meetingCode?: string;
-      error?: string;
+
+    const validateLocally = (): string | null => {
+      let candidate = rawUrl;
+      if (/^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(candidate)) {
+        candidate = `https://meet.google.com/${candidate.toLowerCase()}`;
+      } else if (!/^https?:\/\//i.test(candidate)) {
+        candidate = `https://${candidate}`;
+      }
+      try {
+        const parsed = new URL(candidate);
+        if (parsed.hostname.toLowerCase() !== 'meet.google.com') {
+          setErrorMsg('URL must be a valid meet.google.com meeting link (e.g. https://meet.google.com/abc-defg-hij).');
+          return null;
+        }
+        const code = (parsed.pathname.replace(/^\/+|\/+$/g, '').split('/')[0] || '').toLowerCase();
+        if (!/^[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(code)) {
+          setErrorMsg('Meeting code should match the Google Meet format xxx-yyyy-zzz.');
+          return null;
+        }
+        const normalized = `https://meet.google.com/${code}`;
+        setValidatedUrl(normalized);
+        setMeetingCode(code);
+        if (!meetingTitle.trim()) {
+          setMeetingTitle(`Meet Recording (${code})`);
+        }
+        return normalized;
+      } catch {
+        setErrorMsg('Invalid Google Meet URL format.');
+        return null;
+      }
     };
-    if (!res.ok || !data.valid || !data.normalizedUrl) {
-      setErrorMsg(data.error ?? 'Invalid Google Meet link.');
-      return null;
+
+    try {
+      const res = await fetch('/api/meet/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meetUrl: rawUrl }),
+      });
+      if (res.status === 404 || res.status === 405) {
+        return validateLocally();
+      }
+      const data = (await res.json()) as {
+        valid?: boolean;
+        normalizedUrl?: string;
+        meetingCode?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.valid || !data.normalizedUrl) {
+        setErrorMsg(data.error ?? 'Invalid Google Meet link.');
+        return null;
+      }
+      setValidatedUrl(data.normalizedUrl);
+      setMeetingCode(data.meetingCode ?? '');
+      if (!meetingTitle.trim()) {
+        setMeetingTitle(`Meet Recording (${data.meetingCode})`);
+      }
+      return data.normalizedUrl;
+    } catch {
+      return validateLocally();
     }
-    setValidatedUrl(data.normalizedUrl);
-    setMeetingCode(data.meetingCode ?? '');
-    if (!meetingTitle.trim()) {
-      setMeetingTitle(`Meet Recording (${data.meetingCode})`);
-    }
-    return data.normalizedUrl;
   };
 
   const handleValidateOnly = async (e: React.FormEvent) => {
@@ -217,6 +369,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
 
   const handleStartLiveCapture = async (captureSource: 'meet_tab' | 'room_mic_cam') => {
     setErrorMsg('');
+    setRecoveredNotice('');
     setLastCompleted(null);
 
     const normalized = await validateMeetLink();
@@ -283,16 +436,33 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         }
       }
 
+      const effectiveTitle = meetingTitle.trim() || `Meet Recording (${meetingCode || 'Session'})`;
+      chunkSeqRef.current = 0;
+      checkpointChainRef.current = initLiveCheckpoint({
+        title: effectiveTitle,
+        meetUrl: normalized,
+        folderId: selectedFolderId,
+        notes: sessionNotes.trim(),
+        mimeType: 'video/webm',
+        startedAtMs: Date.now(),
+      }).catch(() => {});
+
       setBookmarks([]);
       const session = await startActiveSpeakerCapture({
         displayStream,
         micStream,
         camStream,
-        sessionLabel: meetingTitle.trim() || `Meet Recording (${meetingCode || 'Session'})`,
+        sessionLabel: effectiveTitle,
         framingMode,
         onTelemetry: (t) => {
           elapsedRef.current = t.elapsedSec;
           setTelemetry(t);
+        },
+        onCheckpointChunk: (chunk, mimeType) => {
+          const seq = chunkSeqRef.current++;
+          checkpointChainRef.current = checkpointChainRef.current
+            .then(() => appendLiveCheckpointChunk(seq, chunk, mimeType, masterKey))
+            .catch(() => {});
         },
         onStreamEnded: () => {
           void handleStopAndSave();
@@ -339,6 +509,8 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         sessionMeetUrl: validatedUrl || meetUrlInput.trim(),
         sessionBookmarks: bookmarks,
       });
+      await checkpointChainRef.current.catch(() => {});
+      await clearLiveCheckpoint().catch(() => {});
     } catch (err) {
       setSaving(false);
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save recorded meeting.');
@@ -471,6 +643,13 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         </div>
       )}
 
+      {recoveredNotice && (
+        <div className="flex items-start gap-2.5 p-3.5 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-900">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+          <span>{recoveredNotice}</span>
+        </div>
+      )}
+
       {errorMsg && (
         <div className="flex items-start gap-2.5 p-3.5 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">
           <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
@@ -567,7 +746,13 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                   <textarea
                     rows={2}
                     value={sessionNotes}
-                    onChange={(e) => setSessionNotes(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSessionNotes(val);
+                      if (isRecording) {
+                        void updateLiveCheckpointMeta({ notes: val }).catch(() => {});
+                      }
+                    }}
                     disabled={saving}
                     placeholder="Add personal notes for this meeting..."
                     className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"

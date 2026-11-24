@@ -30,12 +30,21 @@ interface StartCaptureOptions {
   framingMode: SpeakerFramingMode;
   onTelemetry: (telemetry: RecorderTelemetry) => void;
   onStreamEnded?: () => void;
+  onCheckpointChunk?: (chunk: Blob, mimeType: string) => void;
 }
 
 export async function startActiveSpeakerCapture(
   options: StartCaptureOptions
 ): Promise<ActiveCaptureSession> {
-  const { displayStream, micStream, camStream, sessionLabel, onTelemetry, onStreamEnded } = options;
+  const {
+    displayStream,
+    micStream,
+    camStream,
+    sessionLabel,
+    onTelemetry,
+    onStreamEnded,
+    onCheckpointChunk,
+  } = options;
   let currentFramingMode: SpeakerFramingMode = options.framingMode;
 
   const width = 1280;
@@ -275,15 +284,48 @@ export async function startActiveSpeakerCapture(
       ? new MediaRecorder(mergedStream, { mimeType: fallbackMime, videoBitsPerSecond: 2_500_000 })
       : new MediaRecorder(mergedStream);
     fallbackRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) fallbackChunks.push(e.data);
+      if (e.data.size > 0) {
+        fallbackChunks.push(e.data);
+        onCheckpointChunk?.(e.data, fallbackRecorder?.mimeType || fallbackMime || 'video/webm');
+      }
     };
-    fallbackRecorder.start(1000);
+    fallbackRecorder.start(2500);
+  }
+
+  let backupRecorder: MediaRecorder | null = null;
+  if (useWebCodecs && onCheckpointChunk && typeof MediaRecorder !== 'undefined') {
+    try {
+      const backupCanvasStream = canvas.captureStream(15);
+      const backupTracks = [...backupCanvasStream.getVideoTracks()];
+      if (hasAnyAudioTrack) {
+        backupTracks.push(...mixedDest.stream.getAudioTracks());
+      }
+      const backupStream = new MediaStream(backupTracks);
+      const backupMimes = [
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+        'video/mp4',
+      ];
+      const backupMime = backupMimes.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+      backupRecorder = backupMime
+        ? new MediaRecorder(backupStream, { mimeType: backupMime, videoBitsPerSecond: 900_000 })
+        : new MediaRecorder(backupStream);
+      backupRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          onCheckpointChunk(e.data, backupRecorder?.mimeType || backupMime || 'video/webm');
+        }
+      };
+      backupRecorder.start(3000);
+    } catch {
+      backupRecorder = null;
+    }
   }
 
   let stopped = false;
   const startTimeMs = performance.now();
   let frameIndex = 0;
   let lastTelemetryMs = 0;
+  let lastTimestampUs = -1;
 
   const updateMotionFocus = (sourceVideo: HTMLVideoElement) => {
     if (sourceVideo.readyState < 2 || sourceVideo.videoWidth === 0) return;
@@ -428,7 +470,9 @@ export async function startActiveSpeakerCapture(
 
     if (useWebCodecs && videoEncoder && videoEncoder.state === 'configured') {
       if (videoEncoder.encodeQueueSize < 8) {
-        const timestampUs = Math.round((frameIndex / fps) * 1_000_000);
+        const rawUs = Math.round(elapsedSec * 1_000_000);
+        const timestampUs = Math.max(lastTimestampUs + 1, rawUs);
+        lastTimestampUs = timestampUs;
         const frame = new VideoFrame(canvas, { timestamp: timestampUs });
         videoEncoder.encode(frame, { keyFrame: frameIndex % (fps * 2) === 0 });
         frame.close();
@@ -498,6 +542,14 @@ export async function startActiveSpeakerCapture(
       videoBlob = new Blob(fallbackChunks, { type: videoMimeType });
     } else {
       videoBlob = new Blob([], { type: 'video/mp4' });
+    }
+
+    if (backupRecorder && backupRecorder.state !== 'inactive') {
+      try {
+        backupRecorder.stop();
+      } catch {
+        // Ignore
+      }
     }
 
     displayStream?.getTracks().forEach((t) => t.stop());

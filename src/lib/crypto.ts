@@ -49,7 +49,23 @@ export async function deriveMasterKey(passphrase: string, saltBase64: string): P
       name: 'AES-GCM',
       length: 256,
     },
-    false,
+    true,
+    ['encrypt', 'decrypt']
+  );
+}
+
+export async function exportSessionKey(key: CryptoKey): Promise<string> {
+  const jwk = await crypto.subtle.exportKey('jwk', key);
+  return JSON.stringify(jwk);
+}
+
+export async function importSessionKey(jwkJson: string): Promise<CryptoKey> {
+  const jwk = JSON.parse(jwkJson) as JsonWebKey;
+  return crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'AES-GCM', length: 256 },
+    true,
     ['encrypt', 'decrypt']
   );
 }

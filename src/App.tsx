@@ -1,23 +1,27 @@
 import { useEffect, useState } from 'react';
-import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
   Video,
   FolderArchive,
   KanbanSquare,
   ShieldCheck,
   Lock,
-  LogOut,
   Menu,
   X,
   Plus,
 } from 'lucide-react';
-import { auth } from './firebase';
 import {
-  fetchUserVaultProfile,
+  exportSessionKey,
+  importSessionKey,
+  verifyVaultPassphrase,
+} from './lib/crypto';
+import { fetchLocalProfile } from './lib/localVaultDb';
+import { requestPersistentStorage } from './lib/vaultStorage';
+import {
+  LOCAL_UID,
   subscribeFolders,
   subscribeMeetings,
   subscribeTasks,
-} from './lib/firestoreVault';
+} from './lib/workspaceStore';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { VaultGate } from './components/VaultGate';
 import { CaptureBotStudio } from './components/CaptureBotStudio';
@@ -33,54 +37,107 @@ import type {
 
 type ActiveRoute = 'capture' | 'logs' | 'board' | 'vault';
 
+const SESSION_KEY_STORAGE = 'cadence_session_vault_jwk';
+const SESSION_ROUTE_STORAGE = 'cadence_active_route';
+const SESSION_MEETING_STORAGE = 'cadence_selected_meeting_id';
+
+function readInitialRoute(): ActiveRoute {
+  try {
+    const saved = sessionStorage.getItem(SESSION_ROUTE_STORAGE);
+    if (saved === 'capture' || saved === 'logs' || saved === 'board' || saved === 'vault') {
+      return saved;
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return 'capture';
+}
+
+function readInitialMeetingId(): string | null {
+  try {
+    return sessionStorage.getItem(SESSION_MEETING_STORAGE) || null;
+  } catch {
+    return null;
+  }
+}
+
 function WorkspaceApp() {
-  const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
   const [profile, setProfile] = useState<UserVaultProfile | null>(null);
-  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(true);
   const [masterKey, setMasterKey] = useState<CryptoKey | null>(null);
 
-  const [activeRoute, setActiveRoute] = useState<ActiveRoute>('capture');
+  const [activeRoute, setActiveRoute] = useState<ActiveRoute>(() => readInitialRoute());
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [folders, setFolders] = useState<MeetingFolder[]>([]);
   const [meetings, setMeetings] = useState<MeetingRecord[]>([]);
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
 
-  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
+  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(() =>
+    readInitialMeetingId()
+  );
   const [seekRequestSec, setSeekRequestSec] = useState<number | null>(null);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (nextUser) => {
-      setUser(nextUser);
-      setAuthReady(true);
-      setMasterKey(null);
-      setProfile(null);
-      setFolders([]);
-      setMeetings([]);
-      setTasks([]);
-
-      if (nextUser) {
-        setProfileLoading(true);
-        void fetchUserVaultProfile(nextUser.uid)
-          .then((p) => setProfile(p))
-          .finally(() => setProfileLoading(false));
+    void requestPersistentStorage();
+    setProfileLoading(true);
+    void (async () => {
+      try {
+        const loadedProfile = await fetchLocalProfile();
+        setProfile(loadedProfile);
+        if (loadedProfile) {
+          const cachedJwk = sessionStorage.getItem(SESSION_KEY_STORAGE);
+          if (cachedJwk) {
+            try {
+              const restoredKey = await importSessionKey(cachedJwk);
+              const valid = await verifyVaultPassphrase(restoredKey, loadedProfile.vaultVerifier);
+              if (valid) {
+                setMasterKey(restoredKey);
+              } else {
+                sessionStorage.removeItem(SESSION_KEY_STORAGE);
+              }
+            } catch {
+              sessionStorage.removeItem(SESSION_KEY_STORAGE);
+            }
+          }
+        }
+      } finally {
+        setProfileLoading(false);
       }
-    });
-    return () => unsub();
+    })();
   }, []);
 
   useEffect(() => {
-    if (!user || !masterKey) return;
-    const unsubFolders = subscribeFolders(user.uid, setFolders);
-    const unsubMeetings = subscribeMeetings(user.uid, masterKey, setMeetings);
-    const unsubTasks = subscribeTasks(user.uid, masterKey, setTasks);
+    try {
+      sessionStorage.setItem(SESSION_ROUTE_STORAGE, activeRoute);
+    } catch {
+      // Ignore
+    }
+  }, [activeRoute]);
+
+  useEffect(() => {
+    try {
+      if (selectedMeetingId) {
+        sessionStorage.setItem(SESSION_MEETING_STORAGE, selectedMeetingId);
+      } else {
+        sessionStorage.removeItem(SESSION_MEETING_STORAGE);
+      }
+    } catch {
+      // Ignore
+    }
+  }, [selectedMeetingId]);
+
+  useEffect(() => {
+    if (!masterKey) return;
+    const unsubFolders = subscribeFolders(LOCAL_UID, setFolders);
+    const unsubMeetings = subscribeMeetings(LOCAL_UID, masterKey, setMeetings);
+    const unsubTasks = subscribeTasks(LOCAL_UID, masterKey, setTasks);
     return () => {
       unsubFolders();
       unsubMeetings();
       unsubTasks();
     };
-  }, [user, masterKey]);
+  }, [masterKey]);
 
   const handleOpenMeeting = (meetingId: string) => {
     setSelectedMeetingId(meetingId);
@@ -96,34 +153,41 @@ function WorkspaceApp() {
   };
 
   const handleLockVault = () => {
+    try {
+      sessionStorage.removeItem(SESSION_KEY_STORAGE);
+    } catch {
+      // Ignore
+    }
     setMasterKey(null);
     setFolders([]);
     setMeetings([]);
     setTasks([]);
   };
 
-  const handleSignOut = async () => {
-    handleLockVault();
-    await signOut(auth);
-  };
-
-  if (!authReady) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center text-sm text-slate-500">
-        Initializing secure workspace...
-      </div>
-    );
-  }
-
-  if (!user || !masterKey) {
+  if (!masterKey) {
     return (
       <VaultGate
-        user={user}
         profile={profile}
         profileLoading={profileLoading}
         onUnlocked={(key, unlockedProfile) => {
           setProfile(unlockedProfile);
           setMasterKey(key);
+          void exportSessionKey(key)
+            .then((jwk) => sessionStorage.setItem(SESSION_KEY_STORAGE, jwk))
+            .catch(() => {});
+        }}
+        onVaultReset={() => {
+          try {
+            sessionStorage.removeItem(SESSION_KEY_STORAGE);
+            sessionStorage.removeItem(SESSION_MEETING_STORAGE);
+          } catch {
+            // Ignore
+          }
+          setProfile(null);
+          setMasterKey(null);
+          setFolders([]);
+          setMeetings([]);
+          setTasks([]);
         }}
       />
     );
@@ -136,7 +200,7 @@ function WorkspaceApp() {
 
   const breadcrumbLabel =
     activeRoute === 'capture'
-      ? 'Capture Bot'
+      ? 'Recorder'
       : activeRoute === 'logs'
       ? activeMeeting
         ? `Meeting Logs / ${activeMeeting.payload.title}`
@@ -151,7 +215,7 @@ function WorkspaceApp() {
     icon: typeof Video;
     count?: number;
   }> = [
-    { id: 'capture', label: 'Capture Bot', icon: Video },
+    { id: 'capture', label: 'Recorder', icon: Video },
     { id: 'logs', label: 'Meeting Logs', icon: FolderArchive, count: meetings.length },
     { id: 'board', label: 'Project Board', icon: KanbanSquare, count: openTaskCount },
     { id: 'vault', label: 'Vault Security', icon: ShieldCheck },
@@ -205,30 +269,17 @@ function WorkspaceApp() {
 
         <div className="p-3 border-t border-slate-200 space-y-2">
           <div className="px-2 py-1.5">
-            <div className="text-xs font-medium text-slate-900 truncate">
-              {user.displayName || 'Workspace Owner'}
-            </div>
-            <div className="text-[11px] text-slate-500 truncate">{user.email}</div>
+            <div className="text-xs font-medium text-slate-900 truncate">Local Device Vault</div>
+            <div className="text-[11px] text-slate-500 truncate">Cached &amp; encrypted locally</div>
           </div>
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={handleLockVault}
-              className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-md hover:bg-slate-200/70 transition-colors whitespace-nowrap shrink-0"
-            >
-              <Lock className="w-3.5 h-3.5" />
-              <span>Lock</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSignOut()}
-              className="inline-flex items-center justify-center p-1.5 text-slate-500 hover:text-slate-900 bg-slate-100 rounded-md hover:bg-slate-200/70 transition-colors shrink-0"
-              aria-label="Sign out"
-              title="Sign out"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={handleLockVault}
+            className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-md hover:bg-slate-200/70 transition-colors whitespace-nowrap shrink-0"
+          >
+            <Lock className="w-3.5 h-3.5" />
+            <span>Lock Vault</span>
+          </button>
         </div>
       </aside>
 
@@ -282,20 +333,14 @@ function WorkspaceApp() {
                 );
               })}
             </nav>
-            <div className="p-3 border-t border-slate-200 flex items-center gap-2">
+            <div className="p-3 border-t border-slate-200">
               <button
                 type="button"
                 onClick={handleLockVault}
-                className="flex-1 py-2 text-xs font-medium bg-slate-100 text-slate-800 rounded-md"
+                className="w-full py-2 text-xs font-medium bg-slate-100 text-slate-800 rounded-md inline-flex items-center justify-center gap-1.5"
               >
-                Lock Vault
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSignOut()}
-                className="px-3 py-2 text-xs font-medium bg-slate-100 text-slate-800 rounded-md"
-              >
-                Sign out
+                <Lock className="w-3.5 h-3.5" />
+                <span>Lock Vault</span>
               </button>
             </div>
           </div>
@@ -315,7 +360,7 @@ function WorkspaceApp() {
               <Menu className="w-5 h-5" />
             </button>
             <div className="text-xs sm:text-sm text-slate-500 truncate">
-              <span>Workspace</span>
+              <span>Local Workspace</span>
               <span className="mx-2 text-slate-300">/</span>
               <span className="font-medium text-slate-900">{breadcrumbLabel}</span>
             </div>
@@ -331,7 +376,7 @@ function WorkspaceApp() {
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap shrink-0"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>New Capture</span>
+              <span>New Recording</span>
             </button>
           </div>
         </header>
@@ -339,7 +384,7 @@ function WorkspaceApp() {
         <main className="flex-1 p-4 sm:p-8 max-w-[1280px] w-full mx-auto">
           {activeRoute === 'capture' && (
             <CaptureBotStudio
-              uid={user.uid}
+              uid={LOCAL_UID}
               masterKey={masterKey}
               folders={folders}
               onOpenMeeting={handleOpenMeeting}
@@ -348,7 +393,7 @@ function WorkspaceApp() {
 
           {activeRoute === 'logs' && (
             <MeetingLogsView
-              uid={user.uid}
+              uid={LOCAL_UID}
               masterKey={masterKey}
               meetings={meetings}
               folders={folders}
@@ -363,7 +408,7 @@ function WorkspaceApp() {
 
           {activeRoute === 'board' && (
             <ProjectDashboardView
-              uid={user.uid}
+              uid={LOCAL_UID}
               masterKey={masterKey}
               tasks={tasks}
               meetings={meetings}
@@ -374,7 +419,7 @@ function WorkspaceApp() {
 
           {activeRoute === 'vault' && (
             <VaultSecurityView
-              userEmail={user.email || ''}
+              userEmail="this local device"
               masterKey={masterKey}
               meetings={meetings}
               onLockVault={handleLockVault}

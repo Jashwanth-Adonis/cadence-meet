@@ -12,7 +12,7 @@ import {
   createManualTask,
   deleteTask,
   updateTaskStatus,
-} from '../lib/firestoreVault';
+} from '../lib/workspaceStore';
 import { formatTimecode } from '../lib/formatters';
 import type {
   MeetingFolder,
