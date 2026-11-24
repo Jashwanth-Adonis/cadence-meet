@@ -1,272 +1,222 @@
 import React, { useState } from 'react';
-import { KeyRound, Lock, ShieldCheck, RotateCcw } from 'lucide-react';
+import { KeyRound, Lock, ShieldCheck, ArrowRight, RotateCcw } from 'lucide-react';
 import {
-  createVaultVerifier,
-  deriveMasterKey,
-  generateSalt,
-  verifyVaultPassphrase,
-} from '../lib/crypto';
-import {
-  createLocalFolder,
-  LOCAL_UID,
+  createVaultForPassphrase,
   resetLocalVault,
-  saveLocalProfile,
+  unlockOrLookupVaultByPassphrase,
 } from '../lib/localVaultDb';
+import { PWAInstallButton } from './PWAControls';
 import type { UserVaultProfile } from '../types';
 
 interface VaultGateProps {
-  profile: UserVaultProfile | null;
-  profileLoading: boolean;
   onUnlocked: (key: CryptoKey, profile: UserVaultProfile) => void;
   onVaultReset: () => void;
 }
 
-export const VaultGate: React.FC<VaultGateProps> = ({
-  profile,
-  profileLoading,
-  onUnlocked,
-  onVaultReset,
-}) => {
+export const VaultGate: React.FC<VaultGateProps> = ({ onUnlocked, onVaultReset }) => {
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
+  const [needsConfirmCreate, setNeedsConfirmCreate] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
 
-  const handleCreateVault = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (passphrase.length < 8) {
-      setError('Vault passphrase must be at least 8 characters long.');
-      return;
-    }
-    if (passphrase !== confirmPassphrase) {
-      setError('Passphrases do not match.');
+    setError('');
+
+    if (passphrase.length < 6) {
+      setError('Enter a passphrase of at least 6 characters.');
       return;
     }
 
-    setError('');
     setBusy(true);
     try {
-      const salt = generateSalt();
-      const key = await deriveMasterKey(passphrase, salt);
-      const verifier = await createVaultVerifier(key);
-
-      const newLocalProfile: UserVaultProfile = {
-        uid: LOCAL_UID,
-        email: 'local@device',
-        displayName: 'Local Device Vault',
-        vaultSalt: salt,
-        vaultVerifier: verifier,
-        vaultEnabled: true,
-      };
-      await saveLocalProfile(newLocalProfile);
-      await Promise.all([
-        createLocalFolder('Work Meetings', 'Team syncs and project reviews', '#2563EB'),
-        createLocalFolder('Client Calls', 'External meetings and demos', '#0F766E'),
-        createLocalFolder('Archive', 'Completed project recordings', '#64748B'),
-      ]);
-      onUnlocked(key, newLocalProfile);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to initialize local encrypted vault.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleUnlockVault = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!profile) return;
-    if (!passphrase) {
-      setError('Enter your vault passphrase to sign in.');
-      return;
-    }
-
-    setError('');
-    setBusy(true);
-    try {
-      const key = await deriveMasterKey(passphrase, profile.vaultSalt);
-      const ok = await verifyVaultPassphrase(key, profile.vaultVerifier);
-      if (!ok) {
-        setError('Incorrect passphrase. Unable to unlock your local vault.');
-        setBusy(false);
+      if (needsConfirmCreate) {
+        if (passphrase !== confirmPassphrase) {
+          setError('Passphrases do not match.');
+          setBusy(false);
+          return;
+        }
+        const created = await createVaultForPassphrase(passphrase);
+        onUnlocked(created.key, created.profile);
         return;
       }
-      onUnlocked(key, profile);
-    } catch {
-      setError('Failed to verify vault passphrase.');
+
+      const lookup = await unlockOrLookupVaultByPassphrase(passphrase);
+      if (lookup.status === 'unlocked') {
+        onUnlocked(lookup.key, lookup.profile);
+        return;
+      }
+
+      // First time this passphrase is used on this device — confirm once to create local vault
+      setNeedsConfirmCreate(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to unlock vault with this passphrase.');
     } finally {
       setBusy(false);
     }
   };
 
-  const handleResetVault = async () => {
+  const handleResetAll = async () => {
     setBusy(true);
     setError('');
     try {
       await resetLocalVault();
       setPassphrase('');
       setConfirmPassphrase('');
+      setNeedsConfirmCreate(false);
       setConfirmReset(false);
       onVaultReset();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to reset local vault.');
+      setError(err instanceof Error ? err.message : 'Failed to reset local storage.');
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-6">
-      <div className="w-full max-w-md bg-white border border-slate-200 rounded-xl p-8">
+    <div className="min-h-screen bg-[#090D16] text-slate-100 flex flex-col justify-between p-4 sm:p-6">
+      <div className="w-full max-w-md mx-auto flex items-center justify-between pt-2">
+        <div className="flex items-center gap-2.5">
+          <img
+            src="/icon.svg"
+            alt="Cadence Meet"
+            className="w-8 h-8 rounded-lg shrink-0"
+          />
+          <span className="font-display text-base font-bold tracking-tight text-slate-100">
+            Cadence Meet
+          </span>
+        </div>
+        <PWAInstallButton compact />
+      </div>
+
+      <div className="w-full max-w-md mx-auto bg-[#0F1623] border border-slate-800 rounded-2xl p-6 sm:p-8 my-6">
         <div className="mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <span className="font-display text-lg font-bold tracking-tight text-slate-900">
-              Cadence Meet
-            </span>
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
-              <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
-              AES-256-GCM Local Vault
-            </span>
+          <div className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-400 mb-3">
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Local Passphrase Vault</span>
           </div>
-          <h1 className="font-display text-2xl font-semibold text-slate-900 tracking-tight">
-            {profileLoading
-              ? 'Loading local vault'
-              : profile
-              ? 'Sign in with passphrase'
-              : 'Create your vault passphrase'}
+          <h1 className="font-display text-2xl font-semibold text-slate-100 tracking-tight">
+            {needsConfirmCreate ? 'Confirm new passphrase' : 'Enter your passphrase'}
           </h1>
-          <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-            {profile
-              ? 'Your meeting videos, logs, and tasks are stored encrypted in this browser. Enter your passphrase to unlock.'
-              : 'Set a passphrase to encrypt all recorded meetings and logs locally on this device. Everything stays in your browser.'}
+          <p className="mt-2 text-sm text-slate-400 leading-relaxed">
+            {needsConfirmCreate
+              ? 'No local vault exists for this passphrase yet on this browser. Confirm it below to create one.'
+              : 'Completely local and private. Your passphrase unlocks your encrypted meetings and recordings directly on this device.'}
           </p>
         </div>
 
         {error && (
-          <div className="mb-5 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800 leading-relaxed">
+          <div className="mb-5 p-3 bg-red-950/60 border border-red-800/70 rounded-xl text-xs text-red-200 leading-relaxed">
             {error}
           </div>
         )}
 
-        {profileLoading ? (
-          <div className="py-8 text-center text-sm text-slate-500">
-            Checking local browser storage...
-          </div>
-        ) : !profile ? (
-          <form onSubmit={handleCreateVault} className="space-y-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                Passphrase (min. 8 characters)
-              </label>
-              <div className="relative">
-                <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="password"
-                  value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="Create a passphrase"
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
-                  required
-                  minLength={8}
-                  autoFocus
-                />
-              </div>
+        <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1.5">
+              Vault Passphrase
+            </label>
+            <div className="relative">
+              <KeyRound className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="password"
+                value={passphrase}
+                onChange={(e) => {
+                  setPassphrase(e.target.value);
+                  if (needsConfirmCreate) {
+                    setNeedsConfirmCreate(false);
+                    setConfirmPassphrase('');
+                  }
+                }}
+                placeholder="Enter your passphrase"
+                className="w-full pl-10 pr-3.5 py-2.5 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
+                required
+                minLength={6}
+                autoFocus
+              />
             </div>
+          </div>
+
+          {needsConfirmCreate && (
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                Confirm Passphrase
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                Confirm New Passphrase
               </label>
               <div className="relative">
-                <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="password"
                   value={confirmPassphrase}
                   onChange={(e) => setConfirmPassphrase(e.target.value)}
                   placeholder="Repeat passphrase"
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
+                  className="w-full pl-10 pr-3.5 py-2.5 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
                   required
-                  minLength={8}
-                />
-              </div>
-            </div>
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-            >
-              <span>{busy ? 'Creating Local Vault...' : 'Create & Open Workspace'}</span>
-            </button>
-          </form>
-        ) : (
-          <form onSubmit={handleUnlockVault} className="space-y-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                Vault Passphrase
-              </label>
-              <div className="relative">
-                <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="password"
-                  value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="Enter passphrase to unlock"
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
-                  required
+                  minLength={6}
                   autoFocus
                 />
               </div>
             </div>
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-            >
-              <span>{busy ? 'Unlocking...' : 'Unlock Workspace'}</span>
-            </button>
+          )}
 
-            <div className="pt-2">
-              {!confirmReset ? (
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-500 disabled:opacity-50 transition-colors min-h-[44px]"
+          >
+            <span>
+              {busy
+                ? 'Deriving Encryption Key...'
+                : needsConfirmCreate
+                ? 'Create Passphrase Vault'
+                : 'Open Workspace'}
+            </span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </form>
+
+        <div className="mt-5 pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className="text-slate-500">Zero accounts · Zero cloud uploads</span>
+
+          {!confirmReset ? (
+            <button
+              type="button"
+              onClick={() => setConfirmReset(true)}
+              className="text-slate-400 hover:text-slate-200 py-1"
+            >
+              Clear browser cache
+            </button>
+          ) : (
+            <div className="w-full mt-2 p-3 bg-[#090D16] border border-slate-800 rounded-xl space-y-2">
+              <p className="text-xs text-slate-300">
+                Permanently clear all locally stored vaults and recordings on this browser?
+              </p>
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setConfirmReset(true)}
-                  className="text-xs text-slate-500 hover:text-slate-800 transition-colors"
+                  disabled={busy}
+                  onClick={() => void handleResetAll()}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-lg hover:bg-red-500"
                 >
-                  Forgot passphrase? Reset local vault
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Confirm Clear</span>
                 </button>
-              ) : (
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2.5">
-                  <p className="text-xs text-slate-700 leading-relaxed">
-                    Resetting clears all encrypted recordings and logs stored in this browser so you can set a new passphrase.
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void handleResetVault()}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-md hover:bg-red-700 disabled:opacity-50"
-                    >
-                      <RotateCcw className="w-3 h-3" />
-                      <span>Confirm Reset</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => setConfirmReset(false)}
-                      className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 text-xs font-medium rounded-md hover:bg-slate-50"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setConfirmReset(false)}
+                  className="px-3 py-1.5 bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium rounded-lg hover:bg-slate-700"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
-          </form>
-        )}
-
-        <div className="mt-6 pt-5 border-t border-slate-100 text-xs text-slate-500 flex items-center justify-between">
-          <span>100% Local Browser Storage</span>
-          <span>PBKDF2 · AES-256-GCM</span>
+          )}
         </div>
+      </div>
+
+      <div className="w-full max-w-md mx-auto text-center text-xs text-slate-500 pb-2">
+        AES-256-GCM encrypted in local browser storage · Works offline
       </div>
     </div>
   );

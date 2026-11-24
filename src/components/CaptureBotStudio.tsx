@@ -17,18 +17,27 @@ import {
   ArrowRight,
   Lock,
   MonitorPlay,
+  HardDrive,
+  Smartphone,
+  Sparkles,
+  Volume2,
 } from 'lucide-react';
 import {
   appendLiveCheckpointChunk,
   clearLiveCheckpoint,
+  finalizeCheckpointToMeetingVideo,
+  getStorageEstimate,
   initLiveCheckpoint,
+  loadDecryptedVideoBlob,
   recoverLiveCheckpoint,
   saveEncryptedVideo,
-  triggerBlobDownload,
+  streamDownloadDecryptedVideo,
   updateLiveCheckpointMeta,
 } from '../lib/vaultStorage';
 import { saveEncryptedMeeting } from '../lib/workspaceStore';
 import {
+  MAX_RECORDING_SECONDS,
+  QUALITY_PRESETS,
   startActiveSpeakerCapture,
   type ActiveCaptureSession,
   type RecorderTelemetry,
@@ -37,6 +46,7 @@ import { formatBytes, formatTimecode, generateDocId } from '../lib/formatters';
 import type {
   DecryptedMeetingPayload,
   MeetingFolder,
+  RecordingQualityPreset,
   SessionBookmark,
   SpeakerFramingMode,
 } from '../types';
@@ -50,9 +60,26 @@ interface CaptureBotStudioProps {
 
 type StudioTab = 'live_bot' | 'import_media';
 
-function checkDisplayCaptureAllowed(): { allowed: boolean; inIframe: boolean } {
-  if (typeof window === 'undefined') return { allowed: false, inIframe: false };
+function checkEnvironmentCapabilities(): {
+  inIframe: boolean;
+  isMobile: boolean;
+  displayCaptureAllowed: boolean;
+  supportsDirectDiskSave: boolean;
+} {
+  if (typeof window === 'undefined') {
+    return {
+      inIframe: false,
+      isMobile: false,
+      displayCaptureAllowed: false,
+      supportsDirectDiskSave: false,
+    };
+  }
   const inIframe = window.self !== window.top;
+  const ua = navigator.userAgent.toLowerCase();
+  const isMobile = /android|iphone|ipad|ipod|mobile/.test(ua);
+  const hasDisplayMedia = typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+
+  let policyAllowed = !inIframe;
   const docAny = document as unknown as {
     permissionsPolicy?: { allowsFeature?: (feature: string) => boolean };
     featurePolicy?: { allowsFeature?: (feature: string) => boolean };
@@ -60,15 +87,26 @@ function checkDisplayCaptureAllowed(): { allowed: boolean; inIframe: boolean } {
   const policy = docAny.permissionsPolicy || docAny.featurePolicy;
   if (policy && typeof policy.allowsFeature === 'function') {
     try {
-      return { allowed: policy.allowsFeature('display-capture'), inIframe };
+      policyAllowed = policy.allowsFeature('display-capture');
     } catch {
-      return { allowed: !inIframe, inIframe };
+      policyAllowed = !inIframe;
     }
   }
-  return { allowed: !inIframe, inIframe };
+
+  const supportsDirectDiskSave =
+    !inIframe &&
+    !isMobile &&
+    typeof (window as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker === 'function';
+
+  return {
+    inIframe,
+    isMobile,
+    displayCaptureAllowed: hasDisplayMedia && policyAllowed,
+    supportsDirectDiskSave,
+  };
 }
 
-const DRAFT_STORAGE_KEY = 'cadence_capture_draft_v1';
+const DRAFT_STORAGE_KEY = 'cadence_capture_draft_v2';
 
 interface CaptureDraft {
   meetUrlInput?: string;
@@ -76,6 +114,7 @@ interface CaptureDraft {
   sessionNotes?: string;
   selectedFolderId?: string;
   framingMode?: SpeakerFramingMode;
+  qualityPreset?: RecordingQualityPreset;
 }
 
 function loadCaptureDraft(): CaptureDraft {
@@ -87,6 +126,11 @@ function loadCaptureDraft(): CaptureDraft {
   }
 }
 
+interface FileWritable {
+  write: (data: BufferSource | Blob) => Promise<void>;
+  close: () => Promise<void>;
+}
+
 export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
   uid,
   masterKey,
@@ -94,6 +138,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
   onOpenMeeting,
 }) => {
   const initialDraft = useMemo(() => loadCaptureDraft(), []);
+  const envCaps = useMemo(() => checkEnvironmentCapabilities(), []);
 
   const [studioTab, setStudioTab] = useState<StudioTab>('live_bot');
   const [meetUrlInput, setMeetUrlInput] = useState(initialDraft.meetUrlInput ?? '');
@@ -105,18 +150,26 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     initialDraft.selectedFolderId ?? folders[0]?.id ?? ''
   );
   const [framingMode, setFramingMode] = useState<SpeakerFramingMode>(
-    initialDraft.framingMode ?? 'smart_focus'
+    initialDraft.framingMode ?? 'full_stage'
   );
-  const [includeMic, setIncludeMic] = useState(true);
+  const [qualityPreset, setQualityPreset] = useState<RecordingQualityPreset>(
+    initialDraft.qualityPreset ?? 'long_meeting'
+  );
+  const [directToDiskMode, setDirectToDiskMode] = useState(false);
+
+  // Default: record meeting/device audio cleanly, keep user's mic OFF until toggled on
+  const [includeMic, setIncludeMic] = useState(false);
+  const [noiseCancel, setNoiseCancel] = useState(true);
   const [includeCamPip, setIncludeCamPip] = useState(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [audioWarning, setAudioWarning] = useState('');
   const [recoveredNotice, setRecoveredNotice] = useState('');
+  const [freeBytes, setFreeBytes] = useState<number | null>(null);
 
-  const displayCapInfo = useMemo(() => checkDisplayCaptureAllowed(), []);
-  const [tabCaptureBlocked, setTabCaptureBlocked] = useState(!displayCapInfo.allowed);
+  const [tabCaptureBlocked, setTabCaptureBlocked] = useState(!envCaps.displayCaptureAllowed);
 
   const [telemetry, setTelemetry] = useState<RecorderTelemetry>({
     elapsedSec: 0,
@@ -124,7 +177,10 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     localLevel: 0,
     activeSpeaker: 'idle',
     waveformBars: new Array(24).fill(0.1),
-    codecLabel: 'H.264 / AAC MP4',
+    codecLabel: 'MP4 / WebM',
+    recordedBytes: 0,
+    micEnabled: false,
+    noiseCancelEnabled: true,
   });
 
   const [bookmarkInput, setBookmarkInput] = useState('');
@@ -132,10 +188,11 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
   const [lastCompleted, setLastCompleted] = useState<{
     meetingId: string;
     title: string;
-    videoBlob: Blob;
-    videoUrl: string;
+    videoUrl: string | null;
     videoMimeType: string;
     durationSec: number;
+    fileSizeBytes: number;
+    savedDirectlyToDisk: boolean;
   } | null>(null);
 
   const [importedFile, setImportedFile] = useState<File | null>(null);
@@ -145,6 +202,13 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
   const elapsedRef = useRef(0);
   const chunkSeqRef = useRef(0);
   const checkpointChainRef = useRef<Promise<void>>(Promise.resolve());
+  const diskWritableRef = useRef<FileWritable | null>(null);
+
+  useEffect(() => {
+    void getStorageEstimate().then((est) => {
+      if (est) setFreeBytes(est.freeBytes);
+    });
+  }, [lastCompleted]);
 
   useEffect(() => {
     try {
@@ -156,12 +220,13 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
           sessionNotes,
           selectedFolderId,
           framingMode,
+          qualityPreset,
         } satisfies CaptureDraft)
       );
     } catch {
-      // Ignore storage quota issues
+      // Ignore
     }
-  }, [meetUrlInput, meetingTitle, sessionNotes, selectedFolderId, framingMode]);
+  }, [meetUrlInput, meetingTitle, sessionNotes, selectedFolderId, framingMode, qualityPreset]);
 
   useEffect(() => {
     if (!isRecording && !saving) return;
@@ -173,14 +238,15 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [isRecording, saving]);
 
+  // Recover interrupted recording from IndexedDB live chunks on reload
   useEffect(() => {
     let active = true;
     void (async () => {
       try {
-        const recovered = await recoverLiveCheckpoint(masterKey);
+        const recovered = await recoverLiveCheckpoint(uid, masterKey);
         if (!active || !recovered) return;
         const meetingId = generateDocId('mtg');
-        const savedBytes = await saveEncryptedVideo(meetingId, recovered.videoBlob, masterKey);
+        const finalized = await finalizeCheckpointToMeetingVideo(meetingId);
         const payload: DecryptedMeetingPayload = {
           title: `${recovered.meta.title} (Recovered)`,
           meetUrl: recovered.meta.meetUrl,
@@ -193,28 +259,29 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
           masterKey,
           folderId: recovered.meta.folderId,
           durationSec: recovered.durationSec,
-          fileSizeBytes: savedBytes,
+          fileSizeBytes: finalized.fileSizeBytes,
           hasLocalVideo: true,
-          videoMimeType: recovered.videoBlob.type || recovered.meta.mimeType || 'video/webm',
+          videoMimeType: finalized.mimeType,
           tags: ['recovered'],
           payload,
         });
-        await clearLiveCheckpoint();
+        const blob = await loadDecryptedVideoBlob(meetingId, masterKey);
         if (!active) return;
-        const videoUrl = URL.createObjectURL(recovered.videoBlob);
+        const videoUrl = blob ? URL.createObjectURL(blob) : null;
         setLastCompleted({
           meetingId,
           title: payload.title,
-          videoBlob: recovered.videoBlob,
           videoUrl,
-          videoMimeType: recovered.videoBlob.type || recovered.meta.mimeType,
+          videoMimeType: finalized.mimeType,
           durationSec: recovered.durationSec,
+          fileSizeBytes: finalized.fileSizeBytes,
+          savedDirectlyToDisk: false,
         });
         setRecoveredNotice(
-          `Recovered an interrupted recording ("${payload.title}") from your local cache and saved it to Meeting Logs.`
+          `Recovered interrupted recording "${payload.title}" (${formatBytes(finalized.fileSizeBytes)}) into Meeting Logs.`
         );
       } catch {
-        // Ignore corrupt partial checkpoint
+        // Ignore non-matching checkpoint
       }
     })();
     return () => {
@@ -240,6 +307,27 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     };
   }, [lastCompleted]);
 
+  const handleToggleMic = async () => {
+    const next = !includeMic;
+    if (isRecording && captureRef.current) {
+      const result = await captureRef.current.setMicEnabled(next);
+      setIncludeMic(result);
+      if (next && !result) {
+        setErrorMsg('Microphone permission denied. Check browser mic permissions to record your voice.');
+      }
+    } else {
+      setIncludeMic(next);
+    }
+  };
+
+  const handleToggleNoiseCancel = () => {
+    const next = !noiseCancel;
+    setNoiseCancel(next);
+    if (isRecording && captureRef.current) {
+      captureRef.current.setNoiseCancelEnabled(next);
+    }
+  };
+
   const validateMeetLink = async (): Promise<string | null> => {
     const rawUrl = meetUrlInput.trim();
     if (!rawUrl) {
@@ -259,7 +347,9 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
       try {
         const parsed = new URL(candidate);
         if (parsed.hostname.toLowerCase() !== 'meet.google.com') {
-          setErrorMsg('URL must be a valid meet.google.com meeting link (e.g. https://meet.google.com/abc-defg-hij).');
+          setErrorMsg(
+            'URL must be a valid meet.google.com meeting link (e.g. https://meet.google.com/abc-defg-hij).'
+          );
           return null;
         }
         const code = (parsed.pathname.replace(/^\/+|\/+$/g, '').split('/')[0] || '').toLowerCase();
@@ -316,64 +406,49 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     await validateMeetLink();
   };
 
-  const saveRecordedVideo = async (params: {
-    videoBlob: Blob;
-    durationSec: number;
-    videoMimeType: string;
-    sessionTitle: string;
-    sessionMeetUrl: string;
-    sessionBookmarks: SessionBookmark[];
-  }) => {
-    setSaving(true);
-    try {
-      const meetingId = generateDocId('mtg');
-      let savedBytes = 0;
-      const hasLocalVideo = params.videoBlob.size > 0;
-      if (hasLocalVideo) {
-        savedBytes = await saveEncryptedVideo(meetingId, params.videoBlob, masterKey);
-      }
-
-      const payload: DecryptedMeetingPayload = {
-        title: params.sessionTitle,
-        meetUrl: params.sessionMeetUrl,
-        notes: sessionNotes.trim(),
-        bookmarks: params.sessionBookmarks,
-      };
-
-      await saveEncryptedMeeting({
-        uid,
-        meetingId,
-        masterKey,
-        folderId: selectedFolderId,
-        durationSec: params.durationSec,
-        fileSizeBytes: savedBytes,
-        hasLocalVideo,
-        videoMimeType: params.videoMimeType,
-        tags: [],
-        payload,
-      });
-
-      const videoUrl = URL.createObjectURL(params.videoBlob);
-      setLastCompleted({
-        meetingId,
-        title: params.sessionTitle,
-        videoBlob: params.videoBlob,
-        videoUrl,
-        videoMimeType: params.videoMimeType,
-        durationSec: params.durationSec,
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const handleStartLiveCapture = async (captureSource: 'meet_tab' | 'room_mic_cam') => {
     setErrorMsg('');
+    setAudioWarning('');
     setRecoveredNotice('');
     setLastCompleted(null);
 
     const normalized = await validateMeetLink();
     if (!normalized) return;
+
+    const effectiveTitle = meetingTitle.trim() || `Meet Recording (${meetingCode || 'Session'})`;
+
+    let writable: FileWritable | null = null;
+    if (directToDiskMode && envCaps.supportsDirectDiskSave) {
+      try {
+        const winAny = window as unknown as {
+          showSaveFilePicker: (opts?: {
+            suggestedName?: string;
+            types?: Array<{ description: string; accept: Record<string, string[]> }>;
+          }) => Promise<{ createWritable: () => Promise<FileWritable> }>;
+        };
+        const safeSlug = effectiveTitle
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '');
+        const handle = await winAny.showSaveFilePicker({
+          suggestedName: `${safeSlug || 'meeting-recording'}.webm`,
+          types: [
+            {
+              description: 'Meeting Video',
+              accept: { 'video/webm': ['.webm'], 'video/mp4': ['.mp4'] },
+            },
+          ],
+        });
+        writable = await handle.createWritable();
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return;
+        }
+        setErrorMsg('Could not open a save file on disk. Try Encrypted Browser Vault mode instead.');
+        return;
+      }
+    }
+    diskWritableRef.current = writable;
 
     let displayStream: MediaStream | null = null;
     let micStream: MediaStream | null = null;
@@ -383,8 +458,12 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
       if (captureSource === 'meet_tab') {
         if (tabCaptureBlocked || typeof navigator.mediaDevices?.getDisplayMedia !== 'function') {
           setTabCaptureBlocked(true);
+          await writable?.close().catch(() => {});
+          diskWritableRef.current = null;
           setErrorMsg(
-            'Screen/tab capture is restricted inside an embedded preview frame. Click Open Full-Tab Studio above to record a Google Meet tab, or use Record Room Mic & Camera below.'
+            envCaps.inIframe
+              ? 'Tab capture is blocked inside embedded preview. Open Full-Tab Studio above to record a Google Meet tab.'
+              : 'Screen capture is unavailable in this mobile browser. Record using your phone screen recorder and tap Import Video, or use Desktop Chrome/Edge.'
           );
           return;
         }
@@ -392,11 +471,16 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         try {
           displayStream = await navigator.mediaDevices.getDisplayMedia({
             video: {
-              frameRate: { ideal: 30, max: 30 },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
+              frameRate: { ideal: QUALITY_PRESETS[qualityPreset].fps, max: 30 },
+              width: { ideal: QUALITY_PRESETS[qualityPreset].width },
+              height: { ideal: QUALITY_PRESETS[qualityPreset].height },
             },
-            audio: true,
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+              suppressLocalAudioPlayback: false,
+            } as unknown as MediaTrackConstraints,
           });
         } catch (dispErr) {
           const msg = dispErr instanceof Error ? dispErr.message : String(dispErr);
@@ -405,19 +489,37 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
             msg.toLowerCase().includes('disallowed')
           ) {
             setTabCaptureBlocked(true);
+            await writable?.close().catch(() => {});
+            diskWritableRef.current = null;
             setErrorMsg(
-              'Tab capture is blocked by the embedded frame permissions policy. Click Open Full-Tab Studio above for Google Meet tab recording, or use Record Room Mic & Camera below.'
+              'Tab capture is restricted inside the embedded preview. Click Open Full-Tab Studio above to record Google Meet.'
             );
             return;
           }
           throw dispErr;
         }
+
+        if (displayStream.getAudioTracks().length === 0) {
+          setAudioWarning(
+            'Screen video captured without meeting audio. Re-share and check "Share tab/system audio" if you want other speakers recorded.'
+          );
+        }
       }
 
-      if (includeMic || captureSource === 'room_mic_cam') {
+      const startWithMic = includeMic || captureSource === 'room_mic_cam';
+      if (captureSource === 'room_mic_cam') {
+        setIncludeMic(true);
+      }
+
+      if (startWithMic) {
         try {
           micStream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              channelCount: 1,
+            },
           });
         } catch (micErr) {
           if (captureSource === 'room_mic_cam') {
@@ -429,39 +531,57 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
       if (includeCamPip || captureSource === 'room_mic_cam') {
         try {
           camStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: 1280, height: 720 },
+            video: {
+              width: QUALITY_PRESETS[qualityPreset].width,
+              height: QUALITY_PRESETS[qualityPreset].height,
+            },
           });
         } catch {
-          // Continue with audio + broadcast canvas if camera is unavailable
+          // Continue with audio + visualizer if camera is unavailable
         }
       }
 
-      const effectiveTitle = meetingTitle.trim() || `Meet Recording (${meetingCode || 'Session'})`;
       chunkSeqRef.current = 0;
-      checkpointChainRef.current = initLiveCheckpoint({
-        title: effectiveTitle,
-        meetUrl: normalized,
-        folderId: selectedFolderId,
-        notes: sessionNotes.trim(),
-        mimeType: 'video/webm',
-        startedAtMs: Date.now(),
-      }).catch(() => {});
+      if (!writable) {
+        checkpointChainRef.current = initLiveCheckpoint({
+          vaultId: uid,
+          title: effectiveTitle,
+          meetUrl: normalized,
+          folderId: selectedFolderId,
+          notes: sessionNotes.trim(),
+          mimeType: 'video/webm',
+          startedAtMs: Date.now(),
+        }).catch(() => {});
+      } else {
+        checkpointChainRef.current = Promise.resolve();
+      }
 
       setBookmarks([]);
       const session = await startActiveSpeakerCapture({
         displayStream,
         micStream,
         camStream,
+        micEnabled: startWithMic,
+        noiseCancelEnabled: noiseCancel,
         sessionLabel: effectiveTitle,
         framingMode,
+        qualityPreset,
         onTelemetry: (t) => {
           elapsedRef.current = t.elapsedSec;
           setTelemetry(t);
         },
-        onCheckpointChunk: (chunk, mimeType) => {
+        onChunk: (chunk, mimeType) => {
+          if (writable) {
+            checkpointChainRef.current = checkpointChainRef.current
+              .then(() => writable!.write(chunk))
+              .catch(() => {});
+            return;
+          }
           const seq = chunkSeqRef.current++;
           checkpointChainRef.current = checkpointChainRef.current
-            .then(() => appendLiveCheckpointChunk(seq, chunk, mimeType, masterKey))
+            .then(async () => {
+              await appendLiveCheckpointChunk(seq, chunk, mimeType, masterKey);
+            })
             .catch(() => {});
         },
         onStreamEnded: () => {
@@ -477,6 +597,8 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
       }
       setIsRecording(true);
     } catch (err) {
+      await writable?.close().catch(() => {});
+      diskWritableRef.current = null;
       displayStream?.getTracks().forEach((t) => t.stop());
       micStream?.getTracks().forEach((t) => t.stop());
       camStream?.getTracks().forEach((t) => t.stop());
@@ -493,7 +615,12 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     if (!session) return;
     captureRef.current = null;
     setIsRecording(false);
+    setSaving(true);
     setErrorMsg('');
+    setAudioWarning('');
+
+    const writable = diskWritableRef.current;
+    diskWritableRef.current = null;
 
     try {
       const output = await session.stop();
@@ -501,19 +628,76 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         previewContainerRef.current.innerHTML = '';
       }
 
-      await saveRecordedVideo({
-        videoBlob: output.videoBlob,
-        durationSec: output.durationSec,
-        videoMimeType: output.videoMimeType,
-        sessionTitle: meetingTitle.trim() || `Meet Recording (${meetingCode || 'Session'})`,
-        sessionMeetUrl: validatedUrl || meetUrlInput.trim(),
-        sessionBookmarks: bookmarks,
-      });
-      await checkpointChainRef.current.catch(() => {});
-      await clearLiveCheckpoint().catch(() => {});
+      await checkpointChainRef.current;
+
+      const meetingId = generateDocId('mtg');
+      const effectiveTitle = meetingTitle.trim() || `Meet Recording (${meetingCode || 'Session'})`;
+      const payload: DecryptedMeetingPayload = {
+        title: effectiveTitle,
+        meetUrl: validatedUrl || meetUrlInput.trim(),
+        notes: sessionNotes.trim(),
+        bookmarks,
+      };
+
+      if (writable) {
+        await writable.close();
+        await saveEncryptedMeeting({
+          uid,
+          meetingId,
+          masterKey,
+          folderId: selectedFolderId,
+          durationSec: output.durationSec,
+          fileSizeBytes: output.recordedBytes,
+          hasLocalVideo: false,
+          videoMimeType: output.videoMimeType,
+          tags: ['saved-to-disk'],
+          payload,
+        });
+        setLastCompleted({
+          meetingId,
+          title: effectiveTitle,
+          videoUrl: null,
+          videoMimeType: output.videoMimeType,
+          durationSec: output.durationSec,
+          fileSizeBytes: output.recordedBytes,
+          savedDirectlyToDisk: true,
+        });
+      } else {
+        const finalized = await finalizeCheckpointToMeetingVideo(meetingId);
+        await saveEncryptedMeeting({
+          uid,
+          meetingId,
+          masterKey,
+          folderId: selectedFolderId,
+          durationSec: output.durationSec,
+          fileSizeBytes: finalized.fileSizeBytes,
+          hasLocalVideo: finalized.fileSizeBytes > 0,
+          videoMimeType: finalized.mimeType,
+          tags: [],
+          payload,
+        });
+
+        let previewUrl: string | null = null;
+        if (finalized.fileSizeBytes > 0 && finalized.fileSizeBytes <= 400 * 1024 * 1024) {
+          const blob = await loadDecryptedVideoBlob(meetingId, masterKey);
+          if (blob) previewUrl = URL.createObjectURL(blob);
+        }
+
+        setLastCompleted({
+          meetingId,
+          title: effectiveTitle,
+          videoUrl: previewUrl,
+          videoMimeType: finalized.mimeType,
+          durationSec: output.durationSec,
+          fileSizeBytes: finalized.fileSizeBytes,
+          savedDirectlyToDisk: false,
+        });
+      }
     } catch (err) {
-      setSaving(false);
+      await clearLiveCheckpoint().catch(() => {});
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save recorded meeting.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -524,7 +708,9 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
       return;
     }
     setErrorMsg('');
+    setRecoveredNotice('');
     setLastCompleted(null);
+    setSaving(true);
 
     try {
       const estimatedDuration = await new Promise<number>((resolve) => {
@@ -543,17 +729,48 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         media.src = url;
       });
 
-      await saveRecordedVideo({
-        videoBlob: importedFile,
+      const meetingId = generateDocId('mtg');
+      const savedBytes = await saveEncryptedVideo(meetingId, importedFile, masterKey);
+      const effectiveTitle = meetingTitle.trim() || importedFile.name.replace(/\.[^/.]+$/, '');
+      const payload: DecryptedMeetingPayload = {
+        title: effectiveTitle,
+        meetUrl: validatedUrl || meetUrlInput.trim(),
+        notes: sessionNotes.trim(),
+        bookmarks: [],
+      };
+
+      await saveEncryptedMeeting({
+        uid,
+        meetingId,
+        masterKey,
+        folderId: selectedFolderId,
         durationSec: estimatedDuration,
+        fileSizeBytes: savedBytes,
+        hasLocalVideo: true,
         videoMimeType: importedFile.type || 'video/mp4',
-        sessionTitle: meetingTitle.trim() || importedFile.name.replace(/\.[^/.]+$/, ''),
-        sessionMeetUrl: validatedUrl || meetUrlInput.trim(),
-        sessionBookmarks: [],
+        tags: ['imported'],
+        payload,
       });
+
+      let previewUrl: string | null = null;
+      if (importedFile.size <= 400 * 1024 * 1024) {
+        previewUrl = URL.createObjectURL(importedFile);
+      }
+
+      setLastCompleted({
+        meetingId,
+        title: effectiveTitle,
+        videoUrl: previewUrl,
+        videoMimeType: importedFile.type || 'video/mp4',
+        durationSec: estimatedDuration,
+        fileSizeBytes: savedBytes,
+        savedDirectlyToDisk: false,
+      });
+      setImportedFile(null);
     } catch (err) {
-      setSaving(false);
       setErrorMsg(err instanceof Error ? err.message : 'Failed to store uploaded recording.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -571,36 +788,43 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     setBookmarkInput('');
   };
 
-  const handleDownloadRecording = () => {
-    if (!lastCompleted) return;
+  const handleDownloadRecording = async () => {
+    if (!lastCompleted || lastCompleted.savedDirectlyToDisk) return;
     const ext = lastCompleted.videoMimeType.includes('mp4') ? 'mp4' : 'webm';
     const safeName = lastCompleted.title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '');
-    triggerBlobDownload(lastCompleted.videoBlob, `${safeName || 'meeting-recording'}.${ext}`);
+    await streamDownloadDecryptedVideo(
+      lastCompleted.meetingId,
+      masterKey,
+      `${safeName || 'meeting-recording'}.${ext}`,
+      lastCompleted.videoMimeType
+    );
   };
+
+  const activePresetSpec = QUALITY_PRESETS[qualityPreset];
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-semibold text-slate-900 tracking-tight">
-            Meeting Video Recorder
+          <h1 className="font-display text-2xl font-semibold text-slate-100 tracking-tight">
+            Meeting Video Studio
           </h1>
-          <p className="text-sm text-slate-600 mt-1">
-            Enter a Google Meet link, record the full meeting with the active speaker in view, store it encrypted, and download the video file to your device.
+          <p className="text-sm text-slate-400 mt-1">
+            Captures Google Meet audio clearly by default, filters fan &amp; background noise, and stores encrypted 2–3 hour sessions locally.
           </p>
         </div>
-        <div className="inline-flex items-center p-1 bg-slate-100 border border-slate-200 rounded-lg shrink-0 self-start">
+        <div className="inline-flex items-center p-1 bg-[#0F1623] border border-slate-800 rounded-xl shrink-0 self-start">
           <button
             type="button"
             disabled={isRecording || saving}
             onClick={() => setStudioTab('live_bot')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 min-h-[36px] ${
               studioTab === 'live_bot'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-blue-600 text-white'
+                : 'text-slate-400 hover:text-slate-100'
             }`}
           >
             Live Recorder
@@ -609,10 +833,10 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
             type="button"
             disabled={isRecording || saving}
             onClick={() => setStudioTab('import_media')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 min-h-[36px] ${
               studioTab === 'import_media'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-blue-600 text-white'
+                : 'text-slate-400 hover:text-slate-100'
             }`}
           >
             Import Video
@@ -620,22 +844,20 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         </div>
       </div>
 
-      {tabCaptureBlocked && studioTab === 'live_bot' && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-white border border-slate-200 rounded-xl text-xs text-slate-700">
+      {envCaps.inIframe && tabCaptureBlocked && studioTab === 'live_bot' && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-[#0F1623] border border-slate-800 rounded-2xl text-xs text-slate-300">
           <div className="flex items-start gap-2.5">
-            <MonitorPlay className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+            <MonitorPlay className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
             <div>
-              <span className="font-semibold text-slate-900">
-                Embedded preview detected:
-              </span>{' '}
-              To capture a Google Meet browser tab directly, open this recorder in a full browser tab, or record directly here with your mic and camera.
+              <span className="font-semibold text-slate-100">Embedded preview detected:</span>{' '}
+              Open Full-Tab Studio to capture a Google Meet browser tab, or record directly here with your mic and camera.
             </div>
           </div>
           <a
             href={typeof window !== 'undefined' ? window.location.href : '/'}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto min-h-[40px]"
           >
             <span>Open Full-Tab Studio</span>
             <ExternalLink className="w-3.5 h-3.5" />
@@ -643,29 +865,62 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         </div>
       )}
 
+      {envCaps.isMobile && studioTab === 'live_bot' && (
+        <div className="flex items-start gap-3 p-4 bg-[#0F1623] border border-slate-800 rounded-2xl text-xs text-slate-300 leading-relaxed">
+          <Smartphone className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+          <div>
+            <span className="font-semibold text-slate-100">Mobile capture tip:</span>{' '}
+            {!tabCaptureBlocked ? (
+              <>
+                Tap <strong className="text-slate-100">Record Screen / Meet</strong> if your browser allows screen share. If your phone pauses background web tabs when opening the Meet app, use your phone&rsquo;s built-in Screen Recorder and tap{' '}
+              </>
+            ) : (
+              <>
+                Your mobile browser blocks direct screen capture across native apps. Record the Google Meet app with your phone&rsquo;s Screen Recorder and tap{' '}
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => setStudioTab('import_media')}
+              className="text-blue-400 font-semibold hover:underline"
+            >
+              Import Video
+            </button>{' '}
+            to encrypt and archive it here.
+          </div>
+        </div>
+      )}
+
       {recoveredNotice && (
-        <div className="flex items-start gap-2.5 p-3.5 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-900">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+        <div className="flex items-start gap-2.5 p-3.5 bg-emerald-950/60 border border-emerald-800/70 rounded-xl text-sm text-emerald-200">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
           <span>{recoveredNotice}</span>
         </div>
       )}
 
+      {audioWarning && (
+        <div className="flex items-start gap-2.5 p-3.5 bg-amber-950/60 border border-amber-800/70 rounded-xl text-xs text-amber-200">
+          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <span>{audioWarning}</span>
+        </div>
+      )}
+
       {errorMsg && (
-        <div className="flex items-start gap-2.5 p-3.5 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">
-          <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+        <div className="flex items-start gap-2.5 p-3.5 bg-red-950/60 border border-red-800/70 rounded-xl text-sm text-red-200">
+          <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
           <span>{errorMsg}</span>
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left: Controls */}
-        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+        <div className="lg:col-span-5 bg-[#0F1623] border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-5">
           {studioTab === 'live_bot' ? (
             <>
               <form onSubmit={handleValidateOnly} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                    Google Meet Link (No Calendar Required)
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Google Meet Link
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -677,70 +932,71 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                       }}
                       disabled={isRecording || saving}
                       placeholder="https://meet.google.com/abc-defg-hij"
-                      className="flex-1 min-w-0 px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 disabled:bg-slate-50"
+                      className="flex-1 min-w-0 px-3 py-2 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 disabled:opacity-60 min-h-[44px]"
                     />
                     <button
                       type="submit"
                       disabled={isRecording || saving}
-                      className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-lg hover:bg-slate-200/70 transition-colors whitespace-nowrap shrink-0"
+                      className="px-3.5 py-2 text-xs font-medium text-slate-200 bg-slate-800 border border-slate-700 rounded-xl hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 min-h-[44px]"
                     >
-                      Verify Link
+                      Verify
                     </button>
                   </div>
                   {validatedUrl && (
-                    <div className="mt-2 flex items-center justify-between text-xs text-emerald-700">
-                      <span>Verified session · {meetingCode}</span>
+                    <div className="mt-2 flex items-center justify-between text-xs text-emerald-400">
+                      <span>Verified · {meetingCode}</span>
                       <a
                         href={validatedUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-blue-600 hover:underline font-medium"
+                        className="inline-flex items-center gap-1 text-blue-400 hover:underline font-medium"
                       >
-                        Open Meet Tab
+                        Open Meet
                         <ExternalLink className="w-3 h-3" />
                       </a>
                     </div>
                   )}
                 </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                    Recording Title (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={meetingTitle}
-                    onChange={(e) => setMeetingTitle(e.target.value)}
-                    disabled={isRecording || saving}
-                    placeholder="e.g. Weekly Team Sync"
-                    className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 disabled:bg-slate-50"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                    Save to Folder
-                  </label>
-                  <div className="relative">
-                    <FolderOpen className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <select
-                      value={selectedFolderId}
-                      onChange={(e) => setSelectedFolderId(e.target.value)}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Title (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={meetingTitle}
+                      onChange={(e) => setMeetingTitle(e.target.value)}
                       disabled={isRecording || saving}
-                      className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
-                    >
-                      <option value="">Unfiled Recordings</option>
-                      {folders.map((f) => (
-                        <option key={f.id} value={f.id}>
-                          {f.name}
-                        </option>
-                      ))}
-                    </select>
+                      placeholder="Weekly Sync"
+                      className="w-full px-3 py-2 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 disabled:opacity-60 min-h-[42px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Folder
+                    </label>
+                    <div className="relative">
+                      <FolderOpen className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <select
+                        value={selectedFolderId}
+                        onChange={(e) => setSelectedFolderId(e.target.value)}
+                        disabled={isRecording || saving}
+                        className="w-full pl-9 pr-3 py-2 text-sm bg-[#090D16] text-slate-100 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[42px]"
+                      >
+                        <option value="">Unfiled</option>
+                        {folders.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
                     Session Notes (Optional)
                   </label>
                   <textarea
@@ -754,78 +1010,175 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                       }
                     }}
                     disabled={saving}
-                    placeholder="Add personal notes for this meeting..."
-                    className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
+                    placeholder="Notes saved encrypted with your recording..."
+                    className="w-full px-3 py-2 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                   />
                 </div>
               </form>
 
-              <div className="pt-4 border-t border-slate-100 space-y-3">
-                <span className="block text-xs font-medium text-slate-700">
-                  Active-Speaker Framing
-                </span>
-                <div className="grid grid-cols-2 gap-2">
+              {/* Audio Routing & Noise Cancellation */}
+              <div className="pt-4 border-t border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-300">
+                    Audio &amp; Noise Cancellation
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
+                    <Volume2 className="w-3 h-3" />
+                    Meeting Audio Always On
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <button
                     type="button"
+                    disabled={saving}
+                    onClick={() => void handleToggleMic()}
+                    className={`inline-flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium border rounded-xl transition-colors min-h-[44px] ${
+                      includeMic
+                        ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-200'
+                        : 'border-slate-700 bg-[#090D16] text-slate-300 hover:border-slate-600'
+                    }`}
+                  >
+                    {includeMic ? <Mic className="w-3.5 h-3.5 text-emerald-400" /> : <MicOff className="w-3.5 h-3.5 text-slate-400" />}
+                    <span>{includeMic ? 'My Voice Mic: ON' : 'My Voice Mic: OFF'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={handleToggleNoiseCancel}
+                    className={`inline-flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium border rounded-xl transition-colors min-h-[44px] ${
+                      noiseCancel
+                        ? 'border-blue-500/60 bg-blue-500/15 text-blue-200'
+                        : 'border-slate-700 bg-[#090D16] text-slate-400 hover:border-slate-600'
+                    }`}
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 ${noiseCancel ? 'text-blue-400' : 'text-slate-500'}`} />
+                    <span>{noiseCancel ? 'Noise Cancel: ON' : 'Noise Cancel: OFF'}</span>
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Others&rsquo; voices play normally and are recorded by default. Toggle <strong className="text-slate-200">My Voice Mic</strong> live whenever you speak—fan hum and distant sounds are gated out automatically.
+                </p>
+              </div>
+
+              <div className="pt-4 border-t border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-300">
+                    Video Quality &amp; Storage
+                  </span>
+                  {freeBytes !== null && (
+                    <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                      {formatBytes(freeBytes)} free
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  {(Object.keys(QUALITY_PRESETS) as RecordingQualityPreset[]).map((presetKey) => {
+                    const spec = QUALITY_PRESETS[presetKey];
+                    const active = qualityPreset === presetKey;
+                    return (
+                      <button
+                        key={presetKey}
+                        type="button"
+                        disabled={isRecording || saving}
+                        onClick={() => setQualityPreset(presetKey)}
+                        className={`p-2 text-left border rounded-xl transition-colors ${
+                          active
+                            ? 'border-blue-500 bg-blue-500/15 text-slate-100'
+                            : 'border-slate-800 bg-[#090D16] hover:border-slate-700 text-slate-300'
+                        }`}
+                      >
+                        <div className="text-[11px] font-semibold leading-tight">
+                          {presetKey === 'long_meeting'
+                            ? '2–3 Hr Saver'
+                            : presetKey === 'balanced'
+                            ? 'Standard HD'
+                            : 'High Detail'}
+                        </div>
+                        <div className="text-[10px] font-mono tabular-nums text-slate-400 mt-0.5">
+                          ~{spec.estMbPerHour} MB/hr
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  {activePresetSpec.label} · {activePresetSpec.shortDesc} (3 hr cap)
+                </p>
+
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={isRecording || saving}
+                    onClick={() => setFramingMode('full_stage')}
+                    className={`p-2.5 text-left border rounded-xl transition-colors ${
+                      framingMode === 'full_stage'
+                        ? 'border-blue-500 bg-blue-500/15 text-slate-100'
+                        : 'border-slate-800 bg-[#090D16] hover:border-slate-700 text-slate-300'
+                    }`}
+                  >
+                    <div className="text-xs font-semibold">Full Stage</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Lowest CPU for 3 hrs
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isRecording || saving}
                     onClick={() => setFramingMode('smart_focus')}
-                    className={`p-2.5 text-left border rounded-lg transition-colors ${
+                    className={`p-2.5 text-left border rounded-xl transition-colors ${
                       framingMode === 'smart_focus'
-                        ? 'border-blue-600 bg-blue-50/50 text-slate-900'
-                        : 'border-slate-200 hover:border-slate-300 text-slate-700'
+                        ? 'border-blue-500 bg-blue-500/15 text-slate-100'
+                        : 'border-slate-800 bg-[#090D16] hover:border-slate-700 text-slate-300'
                     }`}
                   >
                     <div className="text-xs font-semibold">Smart Focus</div>
-                    <div className="text-[11px] text-slate-500 mt-0.5">
-                      Tracks active talker cleanly
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFramingMode('full_stage')}
-                    className={`p-2.5 text-left border rounded-lg transition-colors ${
-                      framingMode === 'full_stage'
-                        ? 'border-blue-600 bg-blue-50/50 text-slate-900'
-                        : 'border-slate-200 hover:border-slate-300 text-slate-700'
-                    }`}
-                  >
-                    <div className="text-xs font-semibold">Full Speaker Stage</div>
-                    <div className="text-[11px] text-slate-500 mt-0.5">
-                      Complete uncropped Meet view
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Tracks active talker
                     </div>
                   </button>
                 </div>
 
-                <div className="flex items-center gap-3 pt-1">
-                  <button
-                    type="button"
-                    disabled={isRecording || saving}
-                    onClick={() => setIncludeMic((v) => !v)}
-                    className={`flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border rounded-lg transition-colors ${
-                      includeMic
-                        ? 'border-slate-900 bg-slate-900 text-white'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    {includeMic ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
-                    <span>{includeMic ? 'Mic Mixed' : 'Tab Audio Only'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isRecording || saving}
-                    onClick={() => setIncludeCamPip((v) => !v)}
-                    className={`flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border rounded-lg transition-colors ${
-                      includeCamPip
-                        ? 'border-blue-600 bg-blue-600 text-white'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    <Camera className="w-3.5 h-3.5" />
-                    <span>{includeCamPip ? 'Camera On' : 'Camera Off'}</span>
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  disabled={isRecording || saving}
+                  onClick={() => setIncludeCamPip((v) => !v)}
+                  className={`w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border rounded-xl transition-colors min-h-[40px] ${
+                    includeCamPip
+                      ? 'border-blue-500 bg-blue-500/15 text-blue-200'
+                      : 'border-slate-800 bg-[#090D16] text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>{includeCamPip ? 'Self-Cam Overlay: ON' : 'Self-Cam Overlay: OFF'}</span>
+                </button>
+
+                {envCaps.supportsDirectDiskSave && (
+                  <label className="flex items-start gap-2.5 p-3 bg-[#090D16] border border-slate-800 rounded-xl cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={directToDiskMode}
+                      disabled={isRecording || saving}
+                      onChange={(e) => setDirectToDiskMode(e.target.checked)}
+                      className="mt-0.5 rounded border-slate-700 bg-slate-900 text-blue-500 focus:ring-blue-500"
+                    />
+                    <div className="text-xs">
+                      <span className="font-semibold text-slate-200 inline-flex items-center gap-1">
+                        <HardDrive className="w-3 h-3 text-blue-400" />
+                        Stream directly to hard drive (0 MB browser storage)
+                      </span>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Recommended for 2–3 hour calls. Writes chunks straight to a local video file.
+                      </p>
+                    </div>
+                  </label>
+                )}
               </div>
 
-              <div className="pt-4 border-t border-slate-100 space-y-2.5">
+              <div className="pt-4 border-t border-slate-800 space-y-2.5">
                 {!isRecording ? (
                   <>
                     {!tabCaptureBlocked && (
@@ -833,34 +1186,34 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                         type="button"
                         disabled={saving}
                         onClick={() => void handleStartLiveCapture('meet_tab')}
-                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-500 disabled:opacity-50 transition-colors min-h-[46px]"
                       >
                         <Play className="w-4 h-4 fill-current" />
-                        <span>Record Google Meet Tab</span>
+                        <span>{envCaps.isMobile ? 'Record Screen / Meet' : 'Record Google Meet Tab'}</span>
                       </button>
                     )}
                     <button
                       type="button"
                       disabled={saving}
                       onClick={() => void handleStartLiveCapture('room_mic_cam')}
-                      className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg disabled:opacity-50 transition-colors ${
+                      className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl disabled:opacity-50 transition-colors min-h-[46px] ${
                         tabCaptureBlocked
-                          ? 'bg-blue-600 text-white hover:bg-blue-700'
-                          : 'bg-slate-100 text-slate-800 hover:bg-slate-200/70'
+                          ? 'bg-blue-600 text-white hover:bg-blue-500'
+                          : 'bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700'
                       }`}
                     >
                       <Mic className="w-4 h-4" />
-                      <span>Record Room Mic & Camera</span>
+                      <span>Record Room Mic &amp; Camera</span>
                     </button>
                   </>
                 ) : (
                   <button
                     type="button"
                     onClick={() => void handleStopAndSave()}
-                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors"
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 text-white text-sm font-medium rounded-xl hover:bg-red-500 transition-colors min-h-[48px]"
                   >
                     <Square className="w-4 h-4 fill-current" />
-                    <span>Stop & Save Recording</span>
+                    <span>Stop &amp; Save Recording</span>
                   </button>
                 )}
               </div>
@@ -868,18 +1221,18 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
           ) : (
             <form onSubmit={handleImportSave} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                  Select Video or Audio Recording
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  Select Meeting or Phone Screen Recording
                 </label>
-                <label className="flex flex-col items-center justify-center border border-dashed border-slate-300 rounded-lg p-6 text-center cursor-pointer hover:border-blue-500 hover:bg-slate-50/60 transition-colors">
+                <label className="flex flex-col items-center justify-center border border-dashed border-slate-700 bg-[#090D16] rounded-xl p-6 text-center cursor-pointer hover:border-blue-500 transition-colors min-h-[120px]">
                   <Upload className="w-5 h-5 text-slate-400 mb-2" />
-                  <span className="text-sm font-medium text-slate-800">
-                    {importedFile ? importedFile.name : 'Choose MP4, WebM, MOV, WAV, or MP3'}
+                  <span className="text-sm font-medium text-slate-200">
+                    {importedFile ? importedFile.name : 'Choose MP4, WebM, MOV, or Audio'}
                   </span>
-                  <span className="text-xs text-slate-500 mt-1">
+                  <span className="text-xs text-slate-400 mt-1">
                     {importedFile
-                      ? `${formatBytes(importedFile.size)} · Ready to encrypt and store`
-                      : 'Stored encrypted locally with AES-256-GCM'}
+                      ? `${formatBytes(importedFile.size)} · Ready to encrypt in slices`
+                      : 'Streamed & encrypted locally with AES-256-GCM'}
                   </span>
                   <input
                     type="file"
@@ -892,7 +1245,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">
                   Recording Title
                 </label>
                 <input
@@ -901,19 +1254,19 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                   onChange={(e) => setMeetingTitle(e.target.value)}
                   disabled={saving}
                   placeholder="e.g. Client Call Recording"
-                  className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
+                  className="w-full px-3 py-2 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">
                   Target Folder
                 </label>
                 <select
                   value={selectedFolderId}
                   onChange={(e) => setSelectedFolderId(e.target.value)}
                   disabled={saving}
-                  className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
+                  className="w-full px-3 py-2 text-sm bg-[#090D16] text-slate-100 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
                 >
                   <option value="">Unfiled Recordings</option>
                   {folders.map((f) => (
@@ -927,10 +1280,10 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
               <button
                 type="submit"
                 disabled={!importedFile || saving}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-500 disabled:opacity-50 transition-colors min-h-[46px]"
               >
                 <Lock className="w-4 h-4" />
-                <span>Encrypt & Save Recording</span>
+                <span>Encrypt &amp; Save to Vault</span>
               </button>
             </form>
           )}
@@ -938,27 +1291,35 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
 
         {/* Right: Dark Broadcast Viewport & Completed Video Preview */}
         <div className="lg:col-span-7 space-y-4">
-          <div className="bg-[#0B0F17] border border-slate-800 rounded-xl overflow-hidden">
+          <div className="bg-[#0B0F17] border border-slate-800 rounded-2xl overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/80 text-xs text-slate-300">
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2.5 min-w-0">
                 {isRecording ? (
-                  <span className="inline-flex items-center gap-1.5 text-red-400 font-medium">
+                  <span className="inline-flex items-center gap-1.5 text-red-400 font-medium shrink-0">
                     <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
                     REC
                   </span>
                 ) : (
-                  <Video className="w-3.5 h-3.5 text-slate-400" />
+                  <Video className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 )}
-                <span className="font-medium text-slate-200">
-                  Active-Speaker Recording Viewport
+                <span className="font-medium text-slate-200 truncate">
+                  Active-Speaker Viewport
                 </span>
-                <span className="text-slate-500">·</span>
-                <span className="text-slate-400 font-mono text-[11px]">
+                <span className="text-slate-600 hidden sm:inline">·</span>
+                <span className="text-slate-400 font-mono text-[11px] hidden sm:inline">
                   {telemetry.codecLabel}
                 </span>
               </div>
-              <div className="font-mono tabular-nums text-slate-200 font-medium">
-                {formatTimecode(telemetry.elapsedSec)}
+              <div className="flex items-center gap-3 font-mono tabular-nums text-slate-200 font-medium shrink-0">
+                {isRecording && (
+                  <span className="text-slate-400 text-[11px]">
+                    {formatBytes(telemetry.recordedBytes)}
+                  </span>
+                )}
+                <span>
+                  {formatTimecode(telemetry.elapsedSec)}
+                  {isRecording ? ` / ${formatTimecode(MAX_RECORDING_SECONDS)}` : ''}
+                </span>
               </div>
             </div>
 
@@ -975,16 +1336,31 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                   className="w-full h-full object-contain"
                 />
               )}
+              {!isRecording && !saving && lastCompleted && !lastCompleted.videoUrl && (
+                <div className="text-center px-6 max-w-md">
+                  <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-3" />
+                  <p className="text-sm font-medium text-slate-100">
+                    {lastCompleted.savedDirectlyToDisk
+                      ? 'Saved directly to your hard drive'
+                      : 'Large recording safely cached & encrypted'}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                    {lastCompleted.savedDirectlyToDisk
+                      ? 'Your file was streamed directly to disk with zero browser storage used.'
+                      : 'Use the Download button below to stream the decrypted video directly to disk.'}
+                  </p>
+                </div>
+              )}
               {!isRecording && !saving && !lastCompleted && (
                 <div className="text-center px-6 max-w-md">
-                  <div className="w-11 h-11 rounded-lg bg-slate-800/80 border border-slate-700/80 flex items-center justify-center mx-auto mb-3 text-slate-300">
+                  <div className="w-11 h-11 rounded-xl bg-slate-800/80 border border-slate-700/80 flex items-center justify-center mx-auto mb-3 text-slate-300">
                     <Video className="w-5 h-5" />
                   </div>
                   <p className="text-sm font-medium text-slate-200">
-                    Ready to record full meeting video
+                    Ready for noise-filtered meeting capture
                   </p>
                   <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                    Captures the active speaker completely in frame and saves the complete video encrypted locally for immediate playback and download.
+                    Records Meet participants cleanly while you listen, with adaptive mic noise-cancellation and 5-second encrypted checkpoints for 2–3 hour sessions.
                   </p>
                 </div>
               )}
@@ -993,7 +1369,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                 <div className="text-center px-6 max-w-md">
                   <Loader2 className="w-7 h-7 text-blue-400 animate-spin mx-auto mb-3" />
                   <p className="text-sm font-medium text-slate-100">
-                    Encrypting & saving recorded video...
+                    Finalizing encrypted recording...
                   </p>
                 </div>
               )}
@@ -1020,10 +1396,12 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                   {!isRecording
                     ? 'Audio monitor standby'
                     : telemetry.activeSpeaker === 'remote'
-                    ? 'Active voice: Remote Meet Speaker'
+                    ? 'Remote Meet audio active'
                     : telemetry.activeSpeaker === 'local'
-                    ? 'Active voice: Your Microphone'
-                    : 'Recording active'}
+                    ? 'Your voice active (Noise Cancelled)'
+                    : includeMic
+                    ? 'Listening · Mic gated cleanly'
+                    : 'Listening to Meeting Audio'}
                 </span>
               </div>
 
@@ -1033,12 +1411,12 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                     type="text"
                     value={bookmarkInput}
                     onChange={(e) => setBookmarkInput(e.target.value)}
-                    placeholder="Add timestamp note..."
-                    className="px-2.5 py-1 text-xs bg-slate-900 border border-slate-700 text-slate-100 rounded-md focus:outline-none focus:border-blue-500"
+                    placeholder="Timestamp note..."
+                    className="px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-700 text-slate-100 placeholder:text-slate-500 rounded-lg focus:outline-none focus:border-blue-500 min-h-[34px]"
                   />
                   <button
                     type="submit"
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded-md hover:bg-slate-700 whitespace-nowrap shrink-0"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded-lg hover:bg-slate-700 whitespace-nowrap shrink-0 min-h-[34px]"
                   >
                     <BookmarkPlus className="w-3.5 h-3.5" />
                     Mark
@@ -1049,17 +1427,17 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
           </div>
 
           {bookmarks.length > 0 && (
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-              <div className="text-xs font-semibold text-slate-700 mb-2">
+            <div className="bg-[#0F1623] border border-slate-800 rounded-2xl p-4">
+              <div className="text-xs font-semibold text-slate-300 mb-2">
                 Session Bookmarks ({bookmarks.length})
               </div>
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-slate-800/80">
                 {bookmarks.map((bm) => (
                   <div key={bm.id} className="py-1.5 flex items-center gap-3 text-xs">
-                    <span className="font-mono tabular-nums text-blue-600 font-medium">
+                    <span className="font-mono tabular-nums text-blue-400 font-medium">
                       {formatTimecode(bm.timeSec)}
                     </span>
-                    <span className="text-slate-700">{bm.note}</span>
+                    <span className="text-slate-200">{bm.note}</span>
                   </div>
                 ))}
               </div>
@@ -1067,23 +1445,27 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
           )}
 
           {lastCompleted && !saving && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+            <div className="bg-[#0F1623] border border-slate-800 rounded-2xl p-6 space-y-4">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="flex items-center gap-2 text-emerald-700 text-xs font-semibold mb-1">
+                  <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold mb-1">
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Recording Saved & Encrypted</span>
+                    <span>
+                      {lastCompleted.savedDirectlyToDisk
+                        ? 'Saved Directly to Disk'
+                        : 'Saved & Encrypted in Local Vault'}
+                    </span>
                   </div>
-                  <h2 className="font-display text-lg font-semibold text-slate-900">
+                  <h2 className="font-display text-lg font-semibold text-slate-100">
                     {lastCompleted.title}
                   </h2>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                     <span className="font-mono tabular-nums">
                       {formatTimecode(lastCompleted.durationSec)}
                     </span>
                     <span aria-hidden="true">·</span>
                     <span className="font-mono tabular-nums">
-                      {formatBytes(lastCompleted.videoBlob.size)}
+                      {formatBytes(lastCompleted.fileSizeBytes)}
                     </span>
                     <span aria-hidden="true">·</span>
                     <span>{lastCompleted.videoMimeType}</span>
@@ -1092,11 +1474,11 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-3 pt-1">
-                {lastCompleted.videoBlob.size > 0 && (
+                {!lastCompleted.savedDirectlyToDisk && lastCompleted.fileSizeBytes > 0 && (
                   <button
                     type="button"
-                    onClick={handleDownloadRecording}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap shrink-0"
+                    onClick={() => void handleDownloadRecording()}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-xs font-medium rounded-xl hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0 min-h-[42px]"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Download Recorded Video</span>
@@ -1105,7 +1487,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                 <button
                   type="button"
                   onClick={() => onOpenMeeting(lastCompleted.meetingId)}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-white border border-slate-300 text-slate-800 text-xs font-medium rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 border border-slate-700 text-slate-100 text-xs font-medium rounded-xl hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 min-h-[42px]"
                 >
                   <span>Open in Meeting Logs</span>
                   <ArrowRight className="w-3.5 h-3.5" />

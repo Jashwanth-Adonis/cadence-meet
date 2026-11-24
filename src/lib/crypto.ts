@@ -26,6 +26,16 @@ export function generateSalt(): string {
   return bytesToBase64(salt);
 }
 
+export async function deriveVaultId(passphrase: string): Promise<string> {
+  const encoded = new TextEncoder().encode(`cadence-meet-vault-v2:${passphrase}`);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  const bytes = new Uint8Array(digest);
+  const hex = Array.from(bytes.slice(0, 16))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `vlt_${hex}`;
+}
+
 export async function deriveMasterKey(passphrase: string, saltBase64: string): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(

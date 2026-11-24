@@ -12,12 +12,12 @@ import type {
 export { LOCAL_UID } from './localVaultDb';
 
 export async function createFolder(
-  _uid: string,
+  uid: string,
   name: string,
   description: string,
   colorHex: string
 ): Promise<string> {
-  return local.createLocalFolder(name, description, colorHex);
+  return local.createLocalFolder(uid, name, description, colorHex);
 }
 
 export async function deleteFolder(_uid: string, folderId: string): Promise<void> {
@@ -25,26 +25,26 @@ export async function deleteFolder(_uid: string, folderId: string): Promise<void
 }
 
 export function subscribeFolders(
-  _uid: string,
+  uid: string,
   onData: (folders: MeetingFolder[]) => void
 ): () => void {
-  return local.subscribeLocalFolders(onData);
+  return local.subscribeLocalFolders(uid, onData);
 }
 
 export function subscribeMeetings(
-  _uid: string,
+  uid: string,
   masterKey: CryptoKey,
   onData: (meetings: MeetingRecord[]) => void
 ): () => void {
-  return local.subscribeLocalMeetings(masterKey, onData);
+  return local.subscribeLocalMeetings(uid, masterKey, onData);
 }
 
 export function subscribeTasks(
-  _uid: string,
+  uid: string,
   masterKey: CryptoKey,
   onData: (tasks: ProjectTask[]) => void
 ): () => void {
-  return local.subscribeLocalTasks(masterKey, onData);
+  return local.subscribeLocalTasks(uid, masterKey, onData);
 }
 
 export async function saveEncryptedMeeting(params: {

@@ -2,6 +2,7 @@ export type TaskStatus = 'backlog' | 'in_progress' | 'in_review' | 'done';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 export type MeetingStatus = 'processing' | 'completed' | 'archived';
 export type SpeakerFramingMode = 'full_stage' | 'smart_focus';
+export type RecordingQualityPreset = 'long_meeting' | 'balanced' | 'high';
 
 export interface SessionBookmark {
   id: string;

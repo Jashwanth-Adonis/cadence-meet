@@ -3,34 +3,37 @@ import { Download, HardDrive, Lock, ShieldCheck, Trash2 } from 'lucide-react';
 import {
   deleteEncryptedVideo,
   exportEncryptedArchiveBlob,
+  getStorageEstimate,
   listLocalVaultEntries,
-  loadDecryptedVideoBlob,
+  streamDownloadDecryptedVideo,
   triggerBlobDownload,
 } from '../lib/vaultStorage';
 import { formatBytes, formatDateTime } from '../lib/formatters';
 import type { LocalVaultEntryMeta, MeetingRecord } from '../types';
 
 interface VaultSecurityViewProps {
-  userEmail: string;
+  vaultId: string;
   masterKey: CryptoKey;
   meetings: MeetingRecord[];
   onLockVault: () => void;
 }
 
 export const VaultSecurityView: React.FC<VaultSecurityViewProps> = ({
-  userEmail,
+  vaultId,
   masterKey,
   meetings,
   onLockVault,
 }) => {
   const [entries, setEntries] = useState<LocalVaultEntryMeta[]>([]);
   const [loading, setLoading] = useState(true);
+  const [freeBytes, setFreeBytes] = useState<number | null>(null);
 
   const refreshEntries = async () => {
     setLoading(true);
     try {
-      const list = await listLocalVaultEntries();
+      const [list, est] = await Promise.all([listLocalVaultEntries(), getStorageEstimate()]);
       setEntries(list.sort((a, b) => b.createdAtMs - a.createdAtMs));
+      if (est) setFreeBytes(est.freeBytes);
     } finally {
       setLoading(false);
     }
@@ -46,19 +49,27 @@ export const VaultSecurityView: React.FC<VaultSecurityViewProps> = ({
     return map;
   }, [meetings]);
 
+  const scopedEntries = useMemo(
+    () => entries.filter((e) => meetingMap.has(e.meetingId)),
+    [entries, meetingMap]
+  );
+
   const totalLocalBytes = useMemo(
-    () => entries.reduce((sum, e) => sum + e.fileSizeBytes, 0),
-    [entries]
+    () => scopedEntries.reduce((sum, e) => sum + e.fileSizeBytes, 0),
+    [scopedEntries]
   );
 
   const handleDownloadDecrypted = async (entry: LocalVaultEntryMeta) => {
-    const blob = await loadDecryptedVideoBlob(entry.meetingId, masterKey);
-    if (!blob) return;
     const meeting = meetingMap.get(entry.meetingId);
     const title = meeting?.payload.title ?? entry.meetingId;
     const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     const ext = entry.mimeType.includes('mp4') ? 'mp4' : 'webm';
-    triggerBlobDownload(blob, `${slug || 'meeting-recording'}.${ext}`);
+    await streamDownloadDecryptedVideo(
+      entry.meetingId,
+      masterKey,
+      `${slug || 'meeting-recording'}.${ext}`,
+      entry.mimeType
+    );
   };
 
   const handleExportEncrypted = async (entry: LocalVaultEntryMeta) => {
@@ -76,18 +87,18 @@ export const VaultSecurityView: React.FC<VaultSecurityViewProps> = ({
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-semibold text-slate-900 tracking-tight">
-            Vault Security & Local Storage
+          <h1 className="font-display text-2xl font-semibold text-slate-100 tracking-tight">
+            Vault Security &amp; Local Storage
           </h1>
-          <p className="text-sm text-slate-600 mt-1">
-            Zero-knowledge client-side encryption status and local MP4 device storage management.
+          <p className="text-sm text-slate-400 mt-1">
+            Passphrase-locked local browser storage, quota monitor, and encrypted video downloads.
           </p>
         </div>
 
         <button
           type="button"
           onClick={onLockVault}
-          className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-900 text-white text-xs font-medium rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 self-start"
+          className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 border border-slate-700 text-slate-100 text-xs font-medium rounded-xl hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 self-start min-h-[42px]"
         >
           <Lock className="w-3.5 h-3.5" />
           <span>Lock Vault Session</span>
@@ -95,113 +106,115 @@ export const VaultSecurityView: React.FC<VaultSecurityViewProps> = ({
       </div>
 
       {/* Cryptographic Parameters Strip */}
-      <div className="grid grid-cols-1 md:grid-cols-3 bg-white border border-slate-200 rounded-xl divide-y md:divide-y-0 md:divide-x divide-slate-200">
+      <div className="grid grid-cols-1 md:grid-cols-3 bg-[#0F1623] border border-slate-800 rounded-2xl divide-y md:divide-y-0 md:divide-x divide-slate-800">
         <div className="p-5">
-          <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
-            <ShieldCheck className="w-4 h-4 text-blue-600" />
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
+            <ShieldCheck className="w-4 h-4 text-blue-400" />
             <span>Cipher Suite</span>
           </div>
-          <div className="mt-1.5 font-mono text-sm font-semibold text-slate-900">
-            AES-256-GCM (96-bit random IV)
+          <div className="mt-1.5 font-mono text-sm font-semibold text-slate-100">
+            AES-256-GCM (Chunked)
           </div>
-          <p className="mt-1 text-xs text-slate-500">
-            Applied to every meeting note, task, and locally stored video recording before persistence.
+          <p className="mt-1 text-xs text-slate-400">
+            Video chunks, notes, and tasks are encrypted incrementally with a unique 96-bit IV per slice.
           </p>
         </div>
         <div className="p-5">
-          <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
-            <Lock className="w-4 h-4 text-slate-600" />
-            <span>Key Derivation</span>
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
+            <Lock className="w-4 h-4 text-slate-400" />
+            <span>Passphrase Keyspace</span>
           </div>
-          <div className="mt-1.5 font-mono text-sm font-semibold text-slate-900">
-            PBKDF2-HMAC-SHA256 · 310k
+          <div className="mt-1.5 font-mono text-sm font-semibold text-slate-100">
+            PBKDF2-SHA256 · 310k
           </div>
-          <p className="mt-1 text-xs text-slate-500">
-            Non-extractable Web Crypto key held strictly in memory for {userEmail}.
+          <p className="mt-1 text-xs text-slate-400">
+            Key derived locally from your passphrase ({vaultId.slice(0, 14)}). Zero cloud accounts.
           </p>
         </div>
         <div className="p-5">
-          <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
-            <HardDrive className="w-4 h-4 text-slate-600" />
-            <span>Local Encrypted Vault</span>
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
+            <HardDrive className="w-4 h-4 text-slate-400" />
+            <span>Vault Storage</span>
           </div>
-          <div className="mt-1.5 font-mono tabular-nums text-sm font-semibold text-slate-900">
-            {entries.length} recordings · {formatBytes(totalLocalBytes)}
+          <div className="mt-1.5 font-mono tabular-nums text-sm font-semibold text-slate-100">
+            {scopedEntries.length} files · {formatBytes(totalLocalBytes)}
           </div>
-          <p className="mt-1 text-xs text-slate-500">
-            Stored encrypted inside this browser&rsquo;s IndexedDB for instant offline MP4 export.
+          <p className="mt-1 text-xs text-slate-400">
+            {freeBytes !== null
+              ? `${formatBytes(freeBytes)} available in persistent browser storage.`
+              : 'Persisted in encrypted local IndexedDB.'}
           </p>
         </div>
       </div>
 
-      {/* Local Encrypted MP4 Files Table */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-900">
-            Encrypted Video Files on This Device
+      {/* Local Encrypted Video Files Table */}
+      <div className="bg-[#0F1623] border border-slate-800 rounded-2xl overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-100">
+            Encrypted Video Files in This Vault
           </h2>
-          <span className="text-xs text-slate-500">
-            Decrypted on demand only with your passphrase
+          <span className="text-xs text-slate-400">
+            Stream-decrypted on demand
           </span>
         </div>
 
         {loading ? (
-          <div className="p-8 text-center text-xs text-slate-500">
+          <div className="p-8 text-center text-xs text-slate-400">
             Scanning encrypted local storage...
           </div>
-        ) : entries.length === 0 ? (
-          <div className="p-10 text-center text-xs text-slate-500">
-            No encrypted MP4 recordings stored locally on this device yet.
+        ) : scopedEntries.length === 0 ? (
+          <div className="p-10 text-center text-xs text-slate-400">
+            No encrypted recordings stored inside browser storage for this passphrase yet.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50/70">
+                <tr className="border-b border-slate-800 text-[11px] font-semibold uppercase tracking-wider text-slate-400 bg-[#0B101B]">
                   <th className="py-2.5 px-5">Meeting</th>
                   <th className="py-2.5 px-4">Format</th>
-                  <th className="py-2.5 px-4">Encrypted Size</th>
+                  <th className="py-2.5 px-4">Size</th>
                   <th className="py-2.5 px-4">Saved</th>
-                  <th className="py-2.5 px-5 text-right">Local Device Actions</th>
+                  <th className="py-2.5 px-5 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 text-xs">
-                {entries.map((entry) => {
+              <tbody className="divide-y divide-slate-800/70 text-xs">
+                {scopedEntries.map((entry) => {
                   const meeting = meetingMap.get(entry.meetingId);
                   return (
-                    <tr key={entry.meetingId} className="hover:bg-slate-50/70">
-                      <td className="py-3 px-5 font-medium text-slate-900">
+                    <tr key={entry.meetingId} className="hover:bg-slate-800/40">
+                      <td className="py-3 px-5 font-medium text-slate-100">
                         {meeting?.payload.title ?? entry.meetingId}
                       </td>
-                      <td className="py-3 px-4 font-mono text-slate-600">
+                      <td className="py-3 px-4 font-mono text-slate-400">
                         {entry.mimeType}
                       </td>
-                      <td className="py-3 px-4 font-mono tabular-nums text-slate-700">
+                      <td className="py-3 px-4 font-mono tabular-nums text-slate-300">
                         {formatBytes(entry.fileSizeBytes)}
                       </td>
-                      <td className="py-3 px-4 font-mono tabular-nums text-slate-500">
+                      <td className="py-3 px-4 font-mono tabular-nums text-slate-400">
                         {formatDateTime(entry.createdAtMs)}
                       </td>
                       <td className="py-3 px-5 text-right whitespace-nowrap space-x-2">
                         <button
                           type="button"
                           onClick={() => void handleDownloadDecrypted(entry)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-500"
                         >
                           <Download className="w-3 h-3" />
-                          <span>Save MP4</span>
+                          <span>Save Video</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => void handleExportEncrypted(entry)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-slate-200 text-slate-700 rounded-md hover:bg-slate-50"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 border border-slate-700 text-slate-200 rounded-lg hover:bg-slate-700"
                         >
                           <span>Backup .enc</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => void handleRemoveLocalCopy(entry.meetingId)}
-                          className="inline-flex items-center gap-1 p-1 text-slate-400 hover:text-red-600"
+                          className="inline-flex items-center gap-1 p-1.5 text-slate-500 hover:text-red-400"
                           aria-label="Delete local encrypted video"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

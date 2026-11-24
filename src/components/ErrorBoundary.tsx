@@ -25,19 +25,19 @@ export class ErrorBoundary extends React.Component<
   override render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-          <div className="max-w-lg w-full bg-white border border-slate-200 rounded-xl p-8">
-            <div className="flex items-center gap-3 text-red-700 mb-3">
+        <div className="min-h-screen bg-[#090D16] flex items-center justify-center p-6">
+          <div className="max-w-lg w-full bg-[#0F1623] border border-slate-800 rounded-xl p-8">
+            <div className="flex items-center gap-3 text-red-400 mb-3">
               <AlertTriangle className="w-5 h-5 shrink-0" />
-              <h1 className="text-lg font-semibold text-slate-900">Workspace Recovery Required</h1>
+              <h1 className="text-lg font-semibold text-slate-100">Workspace Recovery Required</h1>
             </div>
-            <p className="text-sm text-slate-600 leading-relaxed mb-6 break-words">
+            <p className="text-sm text-slate-400 leading-relaxed mb-6 break-words">
               {this.state.message}
             </p>
             <button
               type="button"
               onClick={() => window.location.reload()}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500 transition-colors"
             >
               <RotateCcw className="w-4 h-4" />
               Reload Workspace

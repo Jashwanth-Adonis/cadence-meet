@@ -1,6 +1,17 @@
-import { decryptJson, encryptJson } from './crypto';
+import {
+  createVaultVerifier,
+  decryptJson,
+  deriveMasterKey,
+  deriveVaultId,
+  encryptJson,
+  generateSalt,
+  verifyVaultPassphrase,
+} from './crypto';
 import { generateDocId } from './formatters';
-import { deleteEncryptedVideo, requestPersistentStorage } from './vaultStorage';
+import {
+  deleteEncryptedVideo,
+  requestPersistentStorage,
+} from './vaultStorage';
 import type {
   DecryptedMeetingPayload,
   DecryptedTaskPayload,
@@ -13,10 +24,11 @@ import type {
 } from '../types';
 
 const DB_NAME = 'cadence_local_workspace_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 interface LocalEncryptedMeetingDoc {
   id: string;
+  ownerId?: string;
   folderId: string;
   starred: boolean;
   archived: boolean;
@@ -35,6 +47,7 @@ interface LocalEncryptedMeetingDoc {
 
 interface LocalEncryptedTaskDoc {
   id: string;
+  ownerId?: string;
   meetingId: string;
   folderId: string;
   status: TaskStatus;
@@ -128,13 +141,79 @@ async function deleteOne(storeName: string, key: string): Promise<void> {
 
 export const LOCAL_UID = 'local_device';
 
-export async function fetchLocalProfile(): Promise<UserVaultProfile | null> {
-  return getOne<UserVaultProfile>('profile', LOCAL_UID);
+function matchesVault(ownerId: string | undefined, activeVaultId: string): boolean {
+  const effective = ownerId || LOCAL_UID;
+  return effective === activeVaultId;
+}
+
+export async function listLocalProfiles(): Promise<UserVaultProfile[]> {
+  return getAll<UserVaultProfile>('profile');
+}
+
+export async function fetchLocalProfile(uid: string = LOCAL_UID): Promise<UserVaultProfile | null> {
+  return getOne<UserVaultProfile>('profile', uid);
 }
 
 export async function saveLocalProfile(profile: UserVaultProfile): Promise<void> {
   void requestPersistentStorage();
   await putOne('profile', profile);
+}
+
+/**
+ * Passphrase-only unlock: checks whether a vault already exists for this passphrase
+ * (either derived vaultId or legacy local_device vault) and verifies it.
+ */
+export async function unlockOrLookupVaultByPassphrase(passphrase: string): Promise<
+  | { status: 'unlocked'; key: CryptoKey; profile: UserVaultProfile }
+  | { status: 'needs_create'; derivedVaultId: string }
+> {
+  const derivedId = await deriveVaultId(passphrase);
+  const exactProfile = await fetchLocalProfile(derivedId);
+  if (exactProfile) {
+    const key = await deriveMasterKey(passphrase, exactProfile.vaultSalt);
+    const ok = await verifyVaultPassphrase(key, exactProfile.vaultVerifier);
+    if (ok) {
+      return { status: 'unlocked', key, profile: exactProfile };
+    }
+  }
+
+  // Backward compatibility: check legacy 'local_device' or any stored profile matching passphrase
+  const allProfiles = await listLocalProfiles();
+  for (const prof of allProfiles) {
+    const key = await deriveMasterKey(passphrase, prof.vaultSalt);
+    const ok = await verifyVaultPassphrase(key, prof.vaultVerifier);
+    if (ok) {
+      return { status: 'unlocked', key, profile: prof };
+    }
+  }
+
+  return { status: 'needs_create', derivedVaultId: derivedId };
+}
+
+export async function createVaultForPassphrase(passphrase: string): Promise<{
+  key: CryptoKey;
+  profile: UserVaultProfile;
+}> {
+  const vaultId = await deriveVaultId(passphrase);
+  const salt = generateSalt();
+  const key = await deriveMasterKey(passphrase, salt);
+  const verifier = await createVaultVerifier(key);
+
+  const profile: UserVaultProfile = {
+    uid: vaultId,
+    email: 'passphrase@local',
+    displayName: 'Passphrase Vault',
+    vaultSalt: salt,
+    vaultVerifier: verifier,
+    vaultEnabled: true,
+  };
+  await saveLocalProfile(profile);
+  await Promise.all([
+    createLocalFolder(vaultId, 'Work Meetings', 'Team syncs and project reviews', '#2563EB'),
+    createLocalFolder(vaultId, 'Client Calls', 'External meetings and demos', '#0F766E'),
+    createLocalFolder(vaultId, 'Archive', 'Completed recordings', '#64748B'),
+  ]);
+  return { key, profile };
 }
 
 export async function resetLocalVault(): Promise<void> {
@@ -153,6 +232,7 @@ export async function resetLocalVault(): Promise<void> {
 }
 
 export async function createLocalFolder(
+  ownerId: string,
   name: string,
   description: string,
   colorHex: string
@@ -160,7 +240,7 @@ export async function createLocalFolder(
   const id = generateDocId('fld');
   const folder: MeetingFolder = {
     id,
-    ownerId: LOCAL_UID,
+    ownerId,
     name: name.trim().slice(0, 80),
     description: description.trim().slice(0, 240),
     colorHex,
@@ -175,10 +255,14 @@ export async function deleteLocalFolder(folderId: string): Promise<void> {
   notify('folders');
 }
 
-export function subscribeLocalFolders(onData: (folders: MeetingFolder[]) => void): () => void {
+export function subscribeLocalFolders(
+  vaultId: string,
+  onData: (folders: MeetingFolder[]) => void
+): () => void {
   const load = () => {
     void getAll<MeetingFolder>('folders').then((items) => {
-      onData(items.sort((a, b) => a.name.localeCompare(b.name)));
+      const scoped = items.filter((f) => matchesVault(f.ownerId, vaultId));
+      onData(scoped.sort((a, b) => a.name.localeCompare(b.name)));
     });
   };
   listeners.folders.add(load);
@@ -189,28 +273,30 @@ export function subscribeLocalFolders(onData: (folders: MeetingFolder[]) => void
 }
 
 export function subscribeLocalMeetings(
+  vaultId: string,
   masterKey: CryptoKey,
   onData: (meetings: MeetingRecord[]) => void
 ): () => void {
   const load = () => {
     void getAll<LocalEncryptedMeetingDoc>('meetings').then(async (docs) => {
-      const sorted = docs.sort((a, b) => b.recordedAtMs - a.recordedAtMs);
+      const scoped = docs
+        .filter((d) => matchesVault(d.ownerId, vaultId))
+        .sort((a, b) => b.recordedAtMs - a.recordedAtMs);
       const out: MeetingRecord[] = [];
-      for (const d of sorted) {
+      for (const d of scoped) {
         let payload: DecryptedMeetingPayload;
         try {
-          payload = await decryptJson<DecryptedMeetingPayload>(masterKey, d.payloadIv, d.encryptedPayload);
+          payload = await decryptJson<DecryptedMeetingPayload>(
+            masterKey,
+            d.payloadIv,
+            d.encryptedPayload
+          );
         } catch {
-          payload = {
-            title: 'Encrypted Meeting (Key Mismatch)',
-            meetUrl: '',
-            notes: 'Unable to decrypt payload with current vault key.',
-            bookmarks: [],
-          };
+          continue;
         }
         out.push({
           id: d.id,
-          ownerId: LOCAL_UID,
+          ownerId: d.ownerId || vaultId,
           folderId: d.folderId,
           starred: d.starred,
           archived: d.archived,
@@ -237,30 +323,30 @@ export function subscribeLocalMeetings(
 }
 
 export function subscribeLocalTasks(
+  vaultId: string,
   masterKey: CryptoKey,
   onData: (tasks: ProjectTask[]) => void
 ): () => void {
   const load = () => {
     void getAll<LocalEncryptedTaskDoc>('tasks').then(async (docs) => {
-      const sorted = docs.sort((a, b) => b.createdAtMs - a.createdAtMs);
+      const scoped = docs
+        .filter((d) => matchesVault(d.ownerId, vaultId))
+        .sort((a, b) => b.createdAtMs - a.createdAtMs);
       const out: ProjectTask[] = [];
-      for (const d of sorted) {
+      for (const d of scoped) {
         let payload: DecryptedTaskPayload;
         try {
-          payload = await decryptJson<DecryptedTaskPayload>(masterKey, d.payloadIv, d.encryptedTaskData);
+          payload = await decryptJson<DecryptedTaskPayload>(
+            masterKey,
+            d.payloadIv,
+            d.encryptedTaskData
+          );
         } catch {
-          payload = {
-            title: 'Encrypted Task',
-            description: '',
-            assignee: 'Unassigned',
-            category: 'General',
-            meetingTitle: '',
-            timestampLabel: '00:00',
-          };
+          continue;
         }
         out.push({
           id: d.id,
-          ownerId: LOCAL_UID,
+          ownerId: d.ownerId || vaultId,
           meetingId: d.meetingId,
           folderId: d.folderId,
           status: d.status,
@@ -282,6 +368,7 @@ export function subscribeLocalTasks(
 }
 
 export async function saveLocalMeeting(params: {
+  uid: string;
   meetingId: string;
   masterKey: CryptoKey;
   folderId: string;
@@ -292,9 +379,11 @@ export async function saveLocalMeeting(params: {
   tags: string[];
   payload: DecryptedMeetingPayload;
 }): Promise<void> {
+  void requestPersistentStorage();
   const encrypted = await encryptJson(params.masterKey, params.payload);
   const doc: LocalEncryptedMeetingDoc = {
     id: params.meetingId,
+    ownerId: params.uid,
     folderId: params.folderId || '',
     starred: false,
     archived: false,
@@ -363,6 +452,7 @@ export async function deleteLocalMeetingAndVideo(meetingId: string): Promise<voi
 }
 
 export async function createLocalTask(params: {
+  uid: string;
   masterKey: CryptoKey;
   meetingId?: string;
   folderId?: string;
@@ -375,6 +465,7 @@ export async function createLocalTask(params: {
   const encrypted = await encryptJson(params.masterKey, params.payload);
   const doc: LocalEncryptedTaskDoc = {
     id: generateDocId('tsk'),
+    ownerId: params.uid,
     meetingId: params.meetingId ?? '',
     folderId: params.folderId ?? '',
     status: params.status,

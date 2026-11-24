@@ -28,6 +28,7 @@ import {
 import {
   exportEncryptedArchiveBlob,
   loadDecryptedVideoBlob,
+  streamDownloadDecryptedVideo,
   triggerBlobDownload,
 } from '../lib/vaultStorage';
 import { formatBytes, formatDateTime, formatTimecode } from '../lib/formatters';
@@ -68,7 +69,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
 
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
-  const [newFolderColor, setNewFolderColor] = useState('#2563EB');
+  const [newFolderColor, setNewFolderColor] = useState('#3B82F6');
 
   const [notesDraft, setNotesDraft] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
@@ -214,17 +215,21 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
   };
 
   const handleDownloadVideo = async (meeting: MeetingRecord) => {
-    const blob =
-      videoBlobCache && selectedMeeting?.id === meeting.id
-        ? videoBlobCache
-        : await loadDecryptedVideoBlob(meeting.id, masterKey);
-    if (!blob) return;
-    const ext = (blob.type || meeting.videoMimeType).includes('mp4') ? 'mp4' : 'webm';
+    const ext = meeting.videoMimeType.includes('mp4') ? 'mp4' : 'webm';
     const slug = meeting.payload.title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '');
-    triggerBlobDownload(blob, `${slug || 'meeting-recording'}.${ext}`);
+    if (videoBlobCache && selectedMeeting?.id === meeting.id && meeting.fileSizeBytes <= 200 * 1024 * 1024) {
+      triggerBlobDownload(videoBlobCache, `${slug || 'meeting-recording'}.${ext}`);
+      return;
+    }
+    await streamDownloadDecryptedVideo(
+      meeting.id,
+      masterKey,
+      `${slug || 'meeting-recording'}.${ext}`,
+      meeting.videoMimeType
+    );
   };
 
   const handleDownloadEncryptedArchive = async (meeting: MeetingRecord) => {
@@ -280,16 +285,16 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             <button
               type="button"
               onClick={() => onSelectMeeting(null)}
-              className="mt-0.5 p-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors shrink-0"
+              className="mt-0.5 p-2 bg-[#0F1623] border border-slate-800 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors shrink-0"
               aria-label="Back to recordings"
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
             <div>
-              <h1 className="font-display text-xl sm:text-2xl font-semibold text-slate-900 tracking-tight">
+              <h1 className="font-display text-xl sm:text-2xl font-semibold text-slate-100 tracking-tight">
                 {selectedMeeting.payload.title}
               </h1>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                 <span className="font-mono tabular-nums">
                   {formatDateTime(selectedMeeting.recordedAtMs)}
                 </span>
@@ -300,7 +305,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                 <span aria-hidden="true">·</span>
                 <span>{folder ? folder.name : 'Unfiled'}</span>
                 <span aria-hidden="true">·</span>
-                <span className="inline-flex items-center gap-1 text-slate-600">
+                <span className="inline-flex items-center gap-1 text-slate-300">
                   <Lock className="w-3 h-3" />
                   AES-256-GCM
                 </span>
@@ -313,7 +318,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               <button
                 type="button"
                 onClick={() => void handleDownloadVideo(selectedMeeting)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 transition-colors whitespace-nowrap shrink-0"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download Video</span>
@@ -323,7 +328,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               <button
                 type="button"
                 onClick={() => void handleDownloadEncryptedArchive(selectedMeeting)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-medium rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium rounded-lg hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
               >
                 <Shield className="w-3.5 h-3.5" />
                 <span>Export .enc</span>
@@ -370,9 +375,9 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               </div>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="bg-[#0F1623] border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">Folder:</span>
+                <span className="text-xs text-slate-400">Folder:</span>
                 <select
                   value={selectedMeeting.folderId}
                   onChange={(e) =>
@@ -383,7 +388,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                       selectedMeeting
                     )
                   }
-                  className="px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md focus:outline-none focus:border-blue-600"
+                  className="px-2.5 py-1.5 text-xs bg-[#090D16] text-slate-200 border border-slate-700 rounded-md focus:outline-none focus:border-blue-500"
                 >
                   <option value="">Unfiled</option>
                   {folders.map((f) => (
@@ -406,13 +411,13 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                   }
                   className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium border rounded-md transition-colors ${
                     selectedMeeting.starred
-                      ? 'border-amber-300 bg-amber-50 text-amber-800'
-                      : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
+                      : 'border-slate-700 text-slate-300 hover:bg-slate-800'
                   }`}
                 >
                   <Star
                     className={`w-3.5 h-3.5 ${
-                      selectedMeeting.starred ? 'fill-amber-500 text-amber-500' : ''
+                      selectedMeeting.starred ? 'fill-amber-400 text-amber-400' : ''
                     }`}
                   />
                   <span>{selectedMeeting.starred ? 'Starred' : 'Star'}</span>
@@ -422,7 +427,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                   onClick={() =>
                     void setMeetingArchived(uid, selectedMeeting.id, !selectedMeeting.archived)
                   }
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium border border-slate-200 text-slate-600 rounded-md hover:bg-slate-50 transition-colors"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium border border-slate-700 text-slate-300 rounded-md hover:bg-slate-800 transition-colors"
                 >
                   <Archive className="w-3.5 h-3.5" />
                   <span>{selectedMeeting.archived ? 'Restore' : 'Archive'}</span>
@@ -431,14 +436,14 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             </div>
           </div>
 
-          <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-6">
+          <div className="lg:col-span-5 bg-[#0F1623] border border-slate-800 rounded-xl p-6 space-y-6">
             <div>
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
                   Meeting Notes (Encrypted)
                 </h2>
                 {notesSavedNotice && (
-                  <span className="text-[11px] text-emerald-700 font-medium">Saved</span>
+                  <span className="text-[11px] text-emerald-400 font-medium">Saved</span>
                 )}
               </div>
               <textarea
@@ -457,14 +462,14 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                   }
                 }}
                 placeholder="Write meeting notes here..."
-                className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:border-blue-600"
+                className="w-full px-3 py-2 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
               />
               <div className="mt-2 flex justify-end">
                 <button
                   type="button"
                   disabled={savingNotes}
                   onClick={() => void handleSaveNotes()}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white text-xs font-medium rounded-lg hover:bg-slate-800 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 disabled:opacity-50"
                 >
                   <Save className="w-3.5 h-3.5" />
                   <span>{savingNotes ? 'Saving...' : 'Save Notes'}</span>
@@ -473,18 +478,18 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             </div>
 
             {selectedMeeting.payload.bookmarks.length > 0 && (
-              <div className="pt-4 border-t border-slate-100">
-                <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2.5">
+              <div className="pt-4 border-t border-slate-800">
+                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">
                   Timestamp Bookmarks
                 </h2>
-                <div className="divide-y divide-slate-100">
+                <div className="divide-y divide-slate-800/80">
                   {selectedMeeting.payload.bookmarks.map((bm) => (
                     <div key={bm.id} className="py-2 flex items-center justify-between gap-3 text-xs">
-                      <span className="text-slate-700">{bm.note}</span>
+                      <span className="text-slate-200">{bm.note}</span>
                       <button
                         type="button"
                         onClick={() => jumpToTimestamp(bm.timeSec)}
-                        className="inline-flex items-center gap-1 font-mono tabular-nums text-blue-600 hover:underline shrink-0"
+                        className="inline-flex items-center gap-1 font-mono tabular-nums text-blue-400 hover:underline shrink-0"
                       >
                         <Play className="w-2.5 h-2.5 fill-current" />
                         {formatTimecode(bm.timeSec)}
@@ -496,11 +501,11 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             )}
 
             {linkedTasks.length > 0 && (
-              <div className="pt-4 border-t border-slate-100">
-                <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2.5">
+              <div className="pt-4 border-t border-slate-800">
+                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">
                   Linked Tasks ({linkedTasks.length})
                 </h2>
-                <div className="divide-y divide-slate-100">
+                <div className="divide-y divide-slate-800/80">
                   {linkedTasks.map((task) => {
                     const done = task.status === 'done';
                     return (
@@ -510,15 +515,15 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                           onClick={() =>
                             void updateTaskStatus(uid, task.id, done ? 'in_progress' : 'done')
                           }
-                          className="mt-0.5 text-slate-400 hover:text-blue-600 shrink-0"
+                          className="mt-0.5 text-slate-400 hover:text-blue-400 shrink-0"
                         >
                           {done ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                           ) : (
                             <Circle className="w-4 h-4" />
                           )}
                         </button>
-                        <div className="text-xs text-slate-800">{task.payload.title}</div>
+                        <div className="text-xs text-slate-200">{task.payload.title}</div>
                       </div>
                     );
                   })}
@@ -535,10 +540,10 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-semibold text-slate-900 tracking-tight">
+          <h1 className="font-display text-2xl font-semibold text-slate-100 tracking-tight">
             Recorded Meeting Logs
           </h1>
-          <p className="text-sm text-slate-600 mt-1">
+          <p className="text-sm text-slate-400 mt-1">
             Organize encrypted meeting recordings in folders, play them back, and download videos locally.
           </p>
         </div>
@@ -546,7 +551,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
         <button
           type="button"
           onClick={() => setNewFolderOpen((v) => !v)}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white border border-slate-300 text-slate-800 text-xs font-medium rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 self-start"
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 border border-slate-700 text-slate-100 text-xs font-medium rounded-lg hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 self-start"
         >
           <FolderPlus className="w-3.5 h-3.5" />
           <span>New Folder</span>
@@ -556,10 +561,10 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
       {newFolderOpen && (
         <form
           onSubmit={handleCreateFolder}
-          className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-end gap-3"
+          className="bg-[#0F1623] border border-slate-800 rounded-xl p-4 flex flex-wrap items-end gap-3"
         >
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs font-medium text-slate-700 mb-1">
+            <label className="block text-xs font-medium text-slate-300 mb-1">
               Folder Name
             </label>
             <input
@@ -567,22 +572,22 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
               placeholder="e.g. Executive Steering Committee"
-              className="w-full px-3 py-1.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-blue-600"
+              className="w-full px-3 py-1.5 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
               required
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Color</label>
+            <label className="block text-xs font-medium text-slate-300 mb-1">Color</label>
             <input
               type="color"
               value={newFolderColor}
               onChange={(e) => setNewFolderColor(e.target.value)}
-              className="h-9 w-12 p-1 bg-white border border-slate-300 rounded-lg cursor-pointer"
+              className="h-9 w-12 p-1 bg-[#090D16] border border-slate-700 rounded-lg cursor-pointer"
             />
           </div>
           <button
             type="submit"
-            className="px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 whitespace-nowrap shrink-0"
+            className="px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 whitespace-nowrap shrink-0"
           >
             Create Folder
           </button>
@@ -590,8 +595,8 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <aside className="lg:col-span-3 bg-white border border-slate-200 rounded-xl p-3 space-y-1">
-          <div className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        <aside className="lg:col-span-3 bg-[#0F1623] border border-slate-800 rounded-xl p-3 space-y-1">
+          <div className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Folders
           </div>
           <button
@@ -599,8 +604,8 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             onClick={() => setFolderFilter('all')}
             className={`w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg transition-colors ${
               folderFilter === 'all'
-                ? 'bg-slate-900 text-white font-medium'
-                : 'text-slate-700 hover:bg-slate-100'
+                ? 'bg-blue-600 text-white font-medium'
+                : 'text-slate-300 hover:bg-slate-800/70'
             }`}
           >
             <span className="truncate">All Recordings</span>
@@ -611,8 +616,8 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             onClick={() => setFolderFilter('unfiled')}
             className={`w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg transition-colors ${
               folderFilter === 'unfiled'
-                ? 'bg-slate-900 text-white font-medium'
-                : 'text-slate-700 hover:bg-slate-100'
+                ? 'bg-blue-600 text-white font-medium'
+                : 'text-slate-300 hover:bg-slate-800/70'
             }`}
           >
             <span className="truncate">Unfiled</span>
@@ -631,8 +636,8 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                   onClick={() => setFolderFilter(folder.id)}
                   className={`flex-1 min-w-0 flex items-center justify-between px-2.5 py-2 text-xs rounded-lg transition-colors ${
                     active
-                      ? 'bg-slate-900 text-white font-medium'
-                      : 'text-slate-700 hover:bg-slate-100'
+                      ? 'bg-blue-600 text-white font-medium'
+                      : 'text-slate-300 hover:bg-slate-800/70'
                   }`}
                 >
                   <span className="flex items-center gap-2 truncate">
@@ -650,7 +655,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                     if (folderFilter === folder.id) setFolderFilter('all');
                     void deleteFolder(uid, folder.id);
                   }}
-                  className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-red-600 transition-opacity"
+                  className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-red-400 transition-opacity"
                   aria-label={`Delete ${folder.name}`}
                 >
                   <Trash2 className="w-3 h-3" />
@@ -661,20 +666,20 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
         </aside>
 
         <div className="lg:col-span-9 space-y-4">
-          <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="bg-[#0F1623] border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex-1 min-w-[220px] relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search recordings by title, Meet link, or notes..."
-                className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:border-blue-600"
+                className="w-full pl-9 pr-3 py-1.5 text-xs bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
               />
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="inline-flex items-center p-0.5 bg-slate-100 rounded-lg">
+              <div className="inline-flex items-center p-0.5 bg-[#090D16] border border-slate-800 rounded-lg">
                 {(['active', 'starred', 'archived'] as LogStatusFilter[]).map((tab) => (
                   <button
                     key={tab}
@@ -682,8 +687,8 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                     onClick={() => setStatusFilter(tab)}
                     className={`px-2.5 py-1 text-xs font-medium rounded-md capitalize transition-colors whitespace-nowrap shrink-0 ${
                       statusFilter === tab
-                        ? 'bg-white text-slate-900 shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
+                        ? 'bg-slate-800 text-slate-100'
+                        : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
                     {tab}
@@ -694,7 +699,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as 'newest' | 'longest')}
-                className="px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
+                className="px-2.5 py-1.5 text-xs bg-[#090D16] text-slate-200 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
               >
                 <option value="newest">Newest First</option>
                 <option value="longest">Longest Duration</option>
@@ -703,7 +708,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
           </div>
 
           {selectedIds.size > 0 && (
-            <div className="bg-slate-900 text-white rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="bg-[#131B2B] border border-slate-700 text-slate-100 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
               <span className="font-medium font-mono tabular-nums">
                 {selectedIds.size} selected
               </span>
@@ -715,7 +720,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                       void handleBulkMoveFolder(e.target.value === 'unfiled' ? '' : e.target.value);
                     }
                   }}
-                  className="px-2.5 py-1 bg-slate-800 border border-slate-700 text-slate-100 rounded-md"
+                  className="px-2.5 py-1 bg-[#090D16] border border-slate-700 text-slate-100 rounded-md"
                 >
                   <option value="" disabled>
                     Move to folder...
@@ -737,7 +742,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                 <button
                   type="button"
                   onClick={() => void handleBulkDelete()}
-                  className="px-2.5 py-1 bg-red-600 rounded-md hover:bg-red-700"
+                  className="px-2.5 py-1 bg-red-600 text-white rounded-md hover:bg-red-500"
                 >
                   Delete Permanently
                 </button>
@@ -745,7 +750,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             </div>
           )}
 
-          <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden">
+          <div className="bg-[#0F1623] border border-slate-800 rounded-xl divide-y divide-slate-800/80 overflow-hidden">
             {filteredMeetings.length > 0 ? (
               filteredMeetings.map((m) => {
                 const folder = folderMap.get(m.folderId);
@@ -753,13 +758,13 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                 return (
                   <div
                     key={m.id}
-                    className="p-4 hover:bg-slate-50/70 transition-colors flex items-start gap-3.5"
+                    className="p-4 hover:bg-slate-800/40 transition-colors flex items-start gap-3.5"
                   >
                     <input
                       type="checkbox"
                       checked={checked}
                       onChange={() => handleToggleSelect(m.id)}
-                      className="mt-1 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                      className="mt-1 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-500"
                       aria-label={`Select ${m.payload.title}`}
                     />
 
@@ -768,16 +773,16 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                       className="flex-1 min-w-0 cursor-pointer"
                     >
                       <div className="flex items-center justify-between gap-4">
-                        <h3 className="font-display text-sm font-semibold text-slate-900 truncate">
+                        <h3 className="font-display text-sm font-semibold text-slate-100 truncate">
                           {m.payload.title}
                         </h3>
-                        <span className="font-mono tabular-nums text-xs text-slate-500 shrink-0">
+                        <span className="font-mono tabular-nums text-xs text-slate-400 shrink-0">
                           {formatTimecode(m.durationSec)}
                         </span>
                       </div>
 
                       {m.payload.notes && (
-                        <p className="text-xs text-slate-600 mt-1 line-clamp-2 leading-relaxed">
+                        <p className="text-xs text-slate-400 mt-1 line-clamp-2 leading-relaxed">
                           {m.payload.notes}
                         </p>
                       )}
@@ -803,18 +808,18 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                         onClick={() =>
                           void updateMeetingMeta(uid, m.id, { starred: !m.starred }, m)
                         }
-                        className="p-1.5 text-slate-400 hover:text-amber-500 rounded-md"
+                        className="p-1.5 text-slate-500 hover:text-amber-400 rounded-md"
                         aria-label="Toggle star"
                       >
                         <Star
-                          className={`w-4 h-4 ${m.starred ? 'fill-amber-400 text-amber-500' : ''}`}
+                          className={`w-4 h-4 ${m.starred ? 'fill-amber-400 text-amber-400' : ''}`}
                         />
                       </button>
                       {m.hasLocalVideo && (
                         <button
                           type="button"
                           onClick={() => void handleDownloadVideo(m)}
-                          className="p-1.5 text-slate-400 hover:text-blue-600 rounded-md"
+                          className="p-1.5 text-slate-500 hover:text-blue-400 rounded-md"
                           aria-label="Download Video"
                           title="Download video to device"
                         >
@@ -827,17 +832,17 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               })
             ) : (
               <div className="py-14 px-6 text-center">
-                <FolderOpen className="w-7 h-7 text-slate-300 mx-auto mb-3" />
-                <p className="text-sm font-medium text-slate-800">
+                <FolderOpen className="w-7 h-7 text-slate-600 mx-auto mb-3" />
+                <p className="text-sm font-medium text-slate-200">
                   No meeting recordings yet
                 </p>
-                <p className="text-xs text-slate-500 mt-1 mb-4">
+                <p className="text-xs text-slate-400 mt-1 mb-4">
                   Record a Google Meet session or import a video file to build your encrypted archive.
                 </p>
                 <button
                   type="button"
                   onClick={onGoToCapture}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-500 transition-colors"
                 >
                   Record First Meeting
                 </button>
