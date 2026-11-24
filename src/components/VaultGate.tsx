@@ -5,7 +5,7 @@ import {
   resetLocalVault,
   unlockOrLookupVaultByPassphrase,
 } from '../lib/localVaultDb';
-import { PWAInstallButton } from './PWAControls';
+import { AndroidApkDownloadButton, PWAInstallButton } from './PWAControls';
 import type { UserVaultProfile } from '../types';
 
 interface VaultGateProps {
@@ -88,7 +88,10 @@ export const VaultGate: React.FC<VaultGateProps> = ({ onUnlocked, onVaultReset }
             Cadence Meet
           </span>
         </div>
-        <PWAInstallButton compact />
+        <div className="flex items-center gap-2">
+          <AndroidApkDownloadButton compact />
+          <PWAInstallButton compact />
+        </div>
       </div>
 
       <div className="w-full max-w-md mx-auto bg-[#0F1623] border border-slate-800 rounded-2xl p-6 sm:p-8 my-6">

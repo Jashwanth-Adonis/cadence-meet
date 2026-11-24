@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Video,
   Mic,
@@ -42,7 +42,20 @@ import {
   type ActiveCaptureSession,
   type RecorderTelemetry,
 } from '../lib/mp4Recorder';
+import {
+  addNativeCaptureListener,
+  deleteNativeFile,
+  getNativeCaptureStatus,
+  isNativeAndroid,
+  readNativeFileAsBlob,
+  requestNativePermissions,
+  setNativeMicEnabled,
+  setNativeNoiseCancelEnabled,
+  startNativeCapture,
+  stopNativeCapture,
+} from '../lib/nativeCapture';
 import { formatBytes, formatTimecode, generateDocId } from '../lib/formatters';
+import { AndroidApkDownloadButton } from './PWAControls';
 import type {
   DecryptedMeetingPayload,
   MeetingFolder,
@@ -63,6 +76,7 @@ type StudioTab = 'live_bot' | 'import_media';
 function checkEnvironmentCapabilities(): {
   inIframe: boolean;
   isMobile: boolean;
+  nativeAndroid: boolean;
   displayCaptureAllowed: boolean;
   supportsDirectDiskSave: boolean;
 } {
@@ -70,13 +84,15 @@ function checkEnvironmentCapabilities(): {
     return {
       inIframe: false,
       isMobile: false,
+      nativeAndroid: false,
       displayCaptureAllowed: false,
       supportsDirectDiskSave: false,
     };
   }
-  const inIframe = window.self !== window.top;
+  const nativeAndroid = isNativeAndroid();
+  const inIframe = !nativeAndroid && window.self !== window.top;
   const ua = navigator.userAgent.toLowerCase();
-  const isMobile = /android|iphone|ipad|ipod|mobile/.test(ua);
+  const isMobile = nativeAndroid || /android|iphone|ipad|ipod|mobile/.test(ua);
   const hasDisplayMedia = typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 
   let policyAllowed = !inIframe;
@@ -94,6 +110,7 @@ function checkEnvironmentCapabilities(): {
   }
 
   const supportsDirectDiskSave =
+    !nativeAndroid &&
     !inIframe &&
     !isMobile &&
     typeof (window as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker === 'function';
@@ -101,7 +118,8 @@ function checkEnvironmentCapabilities(): {
   return {
     inIframe,
     isMobile,
-    displayCaptureAllowed: hasDisplayMedia && policyAllowed,
+    nativeAndroid,
+    displayCaptureAllowed: nativeAndroid || (hasDisplayMedia && policyAllowed),
     supportsDirectDiskSave,
   };
 }
@@ -163,6 +181,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
   const [includeCamPip, setIncludeCamPip] = useState(false);
 
   const [isRecording, setIsRecording] = useState(false);
+  const [isNativeRecording, setIsNativeRecording] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [audioWarning, setAudioWarning] = useState('');
@@ -177,7 +196,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     localLevel: 0,
     activeSpeaker: 'idle',
     waveformBars: new Array(24).fill(0.1),
-    codecLabel: 'MP4 / WebM',
+    codecLabel: envCaps.nativeAndroid ? 'Android MP4' : 'MP4 / WebM',
     recordedBytes: 0,
     micEnabled: false,
     noiseCancelEnabled: true,
@@ -203,6 +222,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
   const chunkSeqRef = useRef(0);
   const checkpointChainRef = useRef<Promise<void>>(Promise.resolve());
   const diskWritableRef = useRef<FileWritable | null>(null);
+  const ingestingNativeRef = useRef(false);
 
   useEffect(() => {
     void getStorageEstimate().then((est) => {
@@ -238,8 +258,147 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [isRecording, saving]);
 
-  // Recover interrupted recording from IndexedDB live chunks on reload
+  const ingestNativeCompletedFile = useCallback(
+    async (filePath: string, mimeType: string, durationSec: number) => {
+      if (!filePath || ingestingNativeRef.current) return;
+      ingestingNativeRef.current = true;
+      setSaving(true);
+      setIsRecording(false);
+      setIsNativeRecording(false);
+      setErrorMsg('');
+
+      try {
+        const blob = await readNativeFileAsBlob(filePath, mimeType || 'video/mp4');
+        if (!blob) {
+          throw new Error('Recorded file was empty or unavailable.');
+        }
+
+        const meetingId = generateDocId('mtg');
+        const effectiveTitle = meetingTitle.trim() || `Meet Recording (${meetingCode || 'Android'})`;
+        const savedBytes = await saveEncryptedVideo(meetingId, blob, masterKey);
+        const payload: DecryptedMeetingPayload = {
+          title: effectiveTitle,
+          meetUrl: validatedUrl || meetUrlInput.trim(),
+          notes: sessionNotes.trim(),
+          bookmarks,
+        };
+
+        await saveEncryptedMeeting({
+          uid,
+          meetingId,
+          masterKey,
+          folderId: selectedFolderId,
+          durationSec: Math.max(1, durationSec),
+          fileSizeBytes: savedBytes,
+          hasLocalVideo: true,
+          videoMimeType: mimeType || 'video/mp4',
+          tags: ['android-native'],
+          payload,
+        });
+
+        await deleteNativeFile(filePath).catch(() => {});
+
+        let previewUrl: string | null = null;
+        if (savedBytes > 0 && savedBytes <= 400 * 1024 * 1024) {
+          previewUrl = URL.createObjectURL(blob);
+        }
+
+        setLastCompleted({
+          meetingId,
+          title: effectiveTitle,
+          videoUrl: previewUrl,
+          videoMimeType: mimeType || 'video/mp4',
+          durationSec: Math.max(1, durationSec),
+          fileSizeBytes: savedBytes,
+          savedDirectlyToDisk: false,
+        });
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to encrypt native Android recording.');
+      } finally {
+        setSaving(false);
+        ingestingNativeRef.current = false;
+      }
+    },
+    [bookmarks, masterKey, meetingCode, meetingTitle, meetUrlInput, selectedFolderId, sessionNotes, uid, validatedUrl]
+  );
+
+  // Sync with Android native foreground service if active or stopped from notification bar
   useEffect(() => {
+    if (!envCaps.nativeAndroid) return;
+    let active = true;
+
+    const syncNativeStatus = async () => {
+      try {
+        const status = await getNativeCaptureStatus();
+        if (!active) return;
+        if (status.isRecording) {
+          setIsRecording(true);
+          setIsNativeRecording(true);
+          setIncludeMic(status.micEnabled);
+          setNoiseCancel(status.noiseCancelEnabled);
+          elapsedRef.current = status.elapsedSec;
+          setTelemetry((prev) => ({
+            ...prev,
+            elapsedSec: status.elapsedSec,
+            recordedBytes: status.recordedBytes,
+            codecLabel: 'Native H.264 MP4',
+            micEnabled: status.micEnabled,
+            noiseCancelEnabled: status.noiseCancelEnabled,
+            waveformBars: prev.waveformBars.map((_, idx) =>
+              Math.max(0.14, Math.min(0.95, 0.28 + 0.45 * Math.abs(Math.sin(status.elapsedSec + idx * 0.6))))
+            ),
+          }));
+        } else if (status.lastCompletedPath && !ingestingNativeRef.current) {
+          void ingestNativeCompletedFile(
+            status.lastCompletedPath,
+            status.lastCompletedMime || 'video/mp4',
+            status.lastCompletedDurationSec || 1
+          );
+        }
+      } catch {
+        // Ignore transient status poll errors
+      }
+    };
+
+    void syncNativeStatus();
+    const interval = window.setInterval(() => {
+      void syncNativeStatus();
+    }, 650);
+
+    let stopHandle: { remove: () => Promise<void> } | null = null;
+    let errHandle: { remove: () => Promise<void> } | null = null;
+
+    void addNativeCaptureListener('captureStopped', (data) => {
+      const path = typeof data.filePath === 'string' ? data.filePath : '';
+      const mime = typeof data.mimeType === 'string' ? data.mimeType : 'video/mp4';
+      const dur = typeof data.durationSec === 'number' ? data.durationSec : 1;
+      if (path) {
+        void ingestNativeCompletedFile(path, mime, dur);
+      }
+    }).then((h) => {
+      stopHandle = h;
+    });
+
+    void addNativeCaptureListener('captureError', (data) => {
+      const msg = typeof data.message === 'string' ? data.message : 'Native Android capture failed.';
+      setIsRecording(false);
+      setIsNativeRecording(false);
+      setErrorMsg(msg);
+    }).then((h) => {
+      errHandle = h;
+    });
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      void stopHandle?.remove().catch(() => {});
+      void errHandle?.remove().catch(() => {});
+    };
+  }, [envCaps.nativeAndroid, ingestNativeCompletedFile]);
+
+  // Recover interrupted browser recording from IndexedDB live chunks on reload
+  useEffect(() => {
+    if (envCaps.nativeAndroid) return;
     let active = true;
     void (async () => {
       try {
@@ -287,7 +446,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     return () => {
       active = false;
     };
-  }, [masterKey, uid]);
+  }, [envCaps.nativeAndroid, masterKey, uid]);
 
   useEffect(() => {
     if (!selectedFolderId && folders.length > 0) {
@@ -309,6 +468,16 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
 
   const handleToggleMic = async () => {
     const next = !includeMic;
+    if (isRecording && isNativeRecording) {
+      try {
+        const updated = await setNativeMicEnabled(next);
+        setIncludeMic(updated);
+      } catch {
+        setErrorMsg('Unable to toggle native microphone.');
+      }
+      return;
+    }
+
     if (isRecording && captureRef.current) {
       const result = await captureRef.current.setMicEnabled(next);
       setIncludeMic(result);
@@ -320,9 +489,13 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
     }
   };
 
-  const handleToggleNoiseCancel = () => {
+  const handleToggleNoiseCancel = async () => {
     const next = !noiseCancel;
     setNoiseCancel(next);
+    if (isRecording && isNativeRecording) {
+      await setNativeNoiseCancelEnabled(next).catch(() => {});
+      return;
+    }
     if (isRecording && captureRef.current) {
       captureRef.current.setNoiseCancelEnabled(next);
     }
@@ -417,6 +590,29 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
 
     const effectiveTitle = meetingTitle.trim() || `Meet Recording (${meetingCode || 'Session'})`;
 
+    // Native Capacitor Android Foreground Service capture path
+    if (envCaps.nativeAndroid && captureSource === 'meet_tab') {
+      try {
+        const perms = await requestNativePermissions();
+        if (!perms.audio) {
+          setErrorMsg('Microphone & audio capture permission is required by Android to record meeting audio.');
+          return;
+        }
+        setBookmarks([]);
+        await startNativeCapture({
+          title: effectiveTitle,
+          qualityPreset,
+          micEnabled: includeMic,
+          noiseCancelEnabled: noiseCancel,
+        });
+        setIsRecording(true);
+        setIsNativeRecording(true);
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Native Android screen capture canceled.');
+      }
+      return;
+    }
+
     let writable: FileWritable | null = null;
     if (directToDiskMode && envCaps.supportsDirectDiskSave) {
       try {
@@ -463,7 +659,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
           setErrorMsg(
             envCaps.inIframe
               ? 'Tab capture is blocked inside embedded preview. Open Full-Tab Studio above to record a Google Meet tab.'
-              : 'Screen capture is unavailable in this mobile browser. Record using your phone screen recorder and tap Import Video, or use Desktop Chrome/Edge.'
+              : 'Screen capture is unavailable in this mobile browser. Install the Cadence Android APK or import a screen recording below.'
           );
           return;
         }
@@ -596,6 +792,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         previewContainerRef.current.appendChild(session.previewCanvas);
       }
       setIsRecording(true);
+      setIsNativeRecording(false);
     } catch (err) {
       await writable?.close().catch(() => {});
       diskWritableRef.current = null;
@@ -611,6 +808,26 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
   };
 
   const handleStopAndSave = async () => {
+    if (isNativeRecording) {
+      setSaving(true);
+      try {
+        const res = await stopNativeCapture();
+        if (res.filePath) {
+          await ingestNativeCompletedFile(res.filePath, res.mimeType || 'video/mp4', res.durationSec);
+        } else {
+          setIsRecording(false);
+          setIsNativeRecording(false);
+          setSaving(false);
+        }
+      } catch (err) {
+        setIsRecording(false);
+        setIsNativeRecording(false);
+        setSaving(false);
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to stop native capture.');
+      }
+      return;
+    }
+
     const session = captureRef.current;
     if (!session) return;
     captureRef.current = null;
@@ -865,29 +1082,34 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         </div>
       )}
 
-      {envCaps.isMobile && studioTab === 'live_bot' && (
-        <div className="flex items-start gap-3 p-4 bg-[#0F1623] border border-slate-800 rounded-2xl text-xs text-slate-300 leading-relaxed">
-          <Smartphone className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+      {envCaps.nativeAndroid && studioTab === 'live_bot' && (
+        <div className="flex items-start gap-3 p-4 bg-[#0F1623] border border-emerald-800/50 rounded-2xl text-xs text-slate-300 leading-relaxed">
+          <Smartphone className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
           <div>
-            <span className="font-semibold text-slate-100">Mobile capture tip:</span>{' '}
-            {!tabCaptureBlocked ? (
-              <>
-                Tap <strong className="text-slate-100">Record Screen / Meet</strong> if your browser allows screen share. If your phone pauses background web tabs when opening the Meet app, use your phone&rsquo;s built-in Screen Recorder and tap{' '}
-              </>
-            ) : (
-              <>
-                Your mobile browser blocks direct screen capture across native apps. Record the Google Meet app with your phone&rsquo;s Screen Recorder and tap{' '}
-              </>
-            )}
-            <button
-              type="button"
-              onClick={() => setStudioTab('import_media')}
-              className="text-blue-400 font-semibold hover:underline"
-            >
-              Import Video
-            </button>{' '}
-            to encrypt and archive it here.
+            <span className="font-semibold text-slate-100">Native Android Foreground Mode Active:</span>{' '}
+            Tap <strong className="text-slate-100">Record Screen / Meet</strong> to pick Google Meet in Android&rsquo;s native display selector. A background foreground notification keeps recording alive when you switch into the Google Meet app.
           </div>
+        </div>
+      )}
+
+      {envCaps.isMobile && !envCaps.nativeAndroid && studioTab === 'live_bot' && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-[#0F1623] border border-slate-800 rounded-2xl text-xs text-slate-300 leading-relaxed">
+          <div className="flex items-start gap-2.5">
+            <Smartphone className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-semibold text-slate-100">Recording Google Meet on Mobile:</span>{' '}
+              Mobile browsers suspend web tabs when you switch into the Google Meet app. Use the native <strong className="text-slate-100">Cadence Android APK</strong> for background MediaProjection recording, or tap{' '}
+              <button
+                type="button"
+                onClick={() => setStudioTab('import_media')}
+                className="text-blue-400 font-semibold hover:underline"
+              >
+                Import Video
+              </button>{' '}
+              for phone screen recordings.
+            </div>
+          </div>
+          <AndroidApkDownloadButton />
         </div>
       )}
 
@@ -1005,7 +1227,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                     onChange={(e) => {
                       const val = e.target.value;
                       setSessionNotes(val);
-                      if (isRecording) {
+                      if (isRecording && !isNativeRecording) {
                         void updateLiveCheckpointMeta({ notes: val }).catch(() => {});
                       }
                     }}
@@ -1046,7 +1268,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                   <button
                     type="button"
                     disabled={saving}
-                    onClick={handleToggleNoiseCancel}
+                    onClick={() => void handleToggleNoiseCancel()}
                     className={`inline-flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium border rounded-xl transition-colors min-h-[44px] ${
                       noiseCancel
                         ? 'border-blue-500/60 bg-blue-500/15 text-blue-200'
@@ -1109,52 +1331,56 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                   {activePresetSpec.label} · {activePresetSpec.shortDesc} (3 hr cap)
                 </p>
 
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button
-                    type="button"
-                    disabled={isRecording || saving}
-                    onClick={() => setFramingMode('full_stage')}
-                    className={`p-2.5 text-left border rounded-xl transition-colors ${
-                      framingMode === 'full_stage'
-                        ? 'border-blue-500 bg-blue-500/15 text-slate-100'
-                        : 'border-slate-800 bg-[#090D16] hover:border-slate-700 text-slate-300'
-                    }`}
-                  >
-                    <div className="text-xs font-semibold">Full Stage</div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      Lowest CPU for 3 hrs
+                {!envCaps.nativeAndroid && (
+                  <>
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={isRecording || saving}
+                        onClick={() => setFramingMode('full_stage')}
+                        className={`p-2.5 text-left border rounded-xl transition-colors ${
+                          framingMode === 'full_stage'
+                            ? 'border-blue-500 bg-blue-500/15 text-slate-100'
+                            : 'border-slate-800 bg-[#090D16] hover:border-slate-700 text-slate-300'
+                        }`}
+                      >
+                        <div className="text-xs font-semibold">Full Stage</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">
+                          Lowest CPU for 3 hrs
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isRecording || saving}
+                        onClick={() => setFramingMode('smart_focus')}
+                        className={`p-2.5 text-left border rounded-xl transition-colors ${
+                          framingMode === 'smart_focus'
+                            ? 'border-blue-500 bg-blue-500/15 text-slate-100'
+                            : 'border-slate-800 bg-[#090D16] hover:border-slate-700 text-slate-300'
+                        }`}
+                      >
+                        <div className="text-xs font-semibold">Smart Focus</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">
+                          Tracks active talker
+                        </div>
+                      </button>
                     </div>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isRecording || saving}
-                    onClick={() => setFramingMode('smart_focus')}
-                    className={`p-2.5 text-left border rounded-xl transition-colors ${
-                      framingMode === 'smart_focus'
-                        ? 'border-blue-500 bg-blue-500/15 text-slate-100'
-                        : 'border-slate-800 bg-[#090D16] hover:border-slate-700 text-slate-300'
-                    }`}
-                  >
-                    <div className="text-xs font-semibold">Smart Focus</div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      Tracks active talker
-                    </div>
-                  </button>
-                </div>
 
-                <button
-                  type="button"
-                  disabled={isRecording || saving}
-                  onClick={() => setIncludeCamPip((v) => !v)}
-                  className={`w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border rounded-xl transition-colors min-h-[40px] ${
-                    includeCamPip
-                      ? 'border-blue-500 bg-blue-500/15 text-blue-200'
-                      : 'border-slate-800 bg-[#090D16] text-slate-400 hover:border-slate-700'
-                  }`}
-                >
-                  <Camera className="w-3.5 h-3.5" />
-                  <span>{includeCamPip ? 'Self-Cam Overlay: ON' : 'Self-Cam Overlay: OFF'}</span>
-                </button>
+                    <button
+                      type="button"
+                      disabled={isRecording || saving}
+                      onClick={() => setIncludeCamPip((v) => !v)}
+                      className={`w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border rounded-xl transition-colors min-h-[40px] ${
+                        includeCamPip
+                          ? 'border-blue-500 bg-blue-500/15 text-blue-200'
+                          : 'border-slate-800 bg-[#090D16] text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>{includeCamPip ? 'Self-Cam Overlay: ON' : 'Self-Cam Overlay: OFF'}</span>
+                    </button>
+                  </>
+                )}
 
                 {envCaps.supportsDirectDiskSave && (
                   <label className="flex items-start gap-2.5 p-3 bg-[#090D16] border border-slate-800 rounded-xl cursor-pointer">
@@ -1189,7 +1415,13 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                         className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-500 disabled:opacity-50 transition-colors min-h-[46px]"
                       >
                         <Play className="w-4 h-4 fill-current" />
-                        <span>{envCaps.isMobile ? 'Record Screen / Meet' : 'Record Google Meet Tab'}</span>
+                        <span>
+                          {envCaps.nativeAndroid
+                            ? 'Record Screen / Meet (Native)'
+                            : envCaps.isMobile
+                            ? 'Record Screen / Meet'
+                            : 'Record Google Meet Tab'}
+                        </span>
                       </button>
                     )}
                     <button
@@ -1303,7 +1535,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                   <Video className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 )}
                 <span className="font-medium text-slate-200 truncate">
-                  Active-Speaker Viewport
+                  {isNativeRecording ? 'Android Foreground Capture' : 'Active-Speaker Viewport'}
                 </span>
                 <span className="text-slate-600 hidden sm:inline">·</span>
                 <span className="text-slate-400 font-mono text-[11px] hidden sm:inline">
@@ -1326,8 +1558,21 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
             <div className="aspect-video w-full bg-[#070A10] relative flex items-center justify-center">
               <div
                 ref={previewContainerRef}
-                className={`w-full h-full ${isRecording ? 'block' : 'hidden'}`}
+                className={`w-full h-full ${isRecording && !isNativeRecording ? 'block' : 'hidden'}`}
               />
+              {isRecording && isNativeRecording && (
+                <div className="text-center px-6 max-w-md">
+                  <div className="w-12 h-12 rounded-full bg-red-500/20 border border-red-500/40 flex items-center justify-center mx-auto mb-3">
+                    <span className="w-3.5 h-3.5 rounded-full bg-red-500 animate-pulse" />
+                  </div>
+                  <p className="text-sm font-medium text-slate-100">
+                    Recording in Android Background Service
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                    You can switch straight to the Google Meet app now. Use your notification shade or return here to stop &amp; encrypt the video.
+                  </p>
+                </div>
+              )}
               {!isRecording && !saving && lastCompleted?.videoUrl && (
                 <video
                   src={lastCompleted.videoUrl}
@@ -1395,6 +1640,10 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                 <span className="text-xs text-slate-300">
                   {!isRecording
                     ? 'Audio monitor standby'
+                    : isNativeRecording
+                    ? includeMic
+                      ? 'Native Foreground · Meeting + Noise-Cancelled Mic'
+                      : 'Native Foreground · Recording Meeting Audio'
                     : telemetry.activeSpeaker === 'remote'
                     ? 'Remote Meet audio active'
                     : telemetry.activeSpeaker === 'local'

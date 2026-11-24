@@ -25,7 +25,7 @@ import { CaptureBotStudio } from './components/CaptureBotStudio';
 import { MeetingLogsView } from './components/MeetingLogsView';
 import { ProjectDashboardView } from './components/ProjectDashboardView';
 import { VaultSecurityView } from './components/VaultSecurityView';
-import { OfflineIndicator, PWAInstallButton } from './components/PWAControls';
+import { AndroidApkDownloadButton, OfflineIndicator, PWAInstallButton } from './components/PWAControls';
 import type {
   MeetingFolder,
   MeetingRecord,
@@ -316,6 +316,7 @@ function WorkspaceApp() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <AndroidApkDownloadButton compact />
             <PWAInstallButton compact />
             <button
               type="button"

@@ -9,9 +9,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "cap:sync": "npm run build && npx cap sync android",
+    "android:apk": "npm run cap:sync && cd android && ./gradlew assembleDebug && mkdir -p ../public/downloads && cp app/build/outputs/apk/debug/app-debug.apk ../public/downloads/cadence-meet.apk"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
     "@google/genai": "^3.6.1",
     "@tailwindcss/vite": "^4.3.3",
