@@ -1,0 +1,255 @@
+{
+  "entities": {
+    "UserVaultProfile": {
+      "title": "UserVaultProfile",
+      "description": "Stores per-user end-to-end encryption PBKDF2 salt and encrypted vault verification token.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "vaultSalt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "vaultVerifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "vaultEnabled": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "vaultSalt", "vaultVerifier", "vaultEnabled", "createdAt", "updatedAt"]
+    },
+    "MeetingFolder": {
+      "title": "MeetingFolder",
+      "description": "User-defined folder for organizing historical encrypted meeting logs.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "colorHex": {
+          "type": "string",
+          "maxLength": 7,
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "name", "colorHex", "createdAt", "updatedAt"]
+    },
+    "EncryptedMeetingLog": {
+      "title": "EncryptedMeetingLog",
+      "description": "End-to-end encrypted meeting record containing AES-256-GCM encrypted transcript, AI summary, and metadata.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "folderId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "starred": {
+          "type": "boolean"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["processing", "completed", "archived"]
+        },
+        "durationSec": {
+          "type": "number"
+        },
+        "fileSizeBytes": {
+          "type": "number"
+        },
+        "hasLocalVideo": {
+          "type": "boolean"
+        },
+        "videoMimeType": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "speakerCount": {
+          "type": "integer"
+        },
+        "actionItemCount": {
+          "type": "integer"
+        },
+        "tags": {
+          "type": "array"
+        },
+        "encryptedPayload": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600000
+        },
+        "payloadIv": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "recordedAtMs": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "starred",
+        "archived",
+        "status",
+        "durationSec",
+        "fileSizeBytes",
+        "hasLocalVideo",
+        "videoMimeType",
+        "speakerCount",
+        "actionItemCount",
+        "tags",
+        "encryptedPayload",
+        "payloadIv",
+        "recordedAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ProjectTask": {
+      "title": "ProjectTask",
+      "description": "Action item extracted from a recorded meeting or created manually in the project management dashboard.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "meetingId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "folderId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["backlog", "in_progress", "in_review", "done"]
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "urgent"]
+        },
+        "dueDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "timestampSec": {
+          "type": "number"
+        },
+        "encryptedTaskData": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32000
+        },
+        "payloadIv": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "status",
+        "priority",
+        "encryptedTaskData",
+        "payloadIv",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserVaultProfile" },
+      "description": "Private per-user encryption vault profile and key verification metadata."
+    },
+    "/users/{userId}/folders/{folderId}": {
+      "schema": { "$ref": "#/entities/MeetingFolder" },
+      "description": "User folders for organizing historical meeting logs."
+    },
+    "/users/{userId}/meetings/{meetingId}": {
+      "schema": { "$ref": "#/entities/EncryptedMeetingLog" },
+      "description": "Encrypted meeting logs, transcripts, and summaries owned by the user."
+    },
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/ProjectTask" },
+      "description": "Project management tasks and extracted meeting action items owned by the user."
+    }
+  }
+}

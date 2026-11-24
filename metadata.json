@@ -1,0 +1,6 @@
+{
+  "name": "Cadence Meet",
+  "description": "Encrypted Google Meet video recorder with active-speaker framing, local MP4/WebM storage, and organized recording logs.",
+  "requestFramePermissions": ["microphone", "camera"],
+  "majorCapabilities": []
+}
