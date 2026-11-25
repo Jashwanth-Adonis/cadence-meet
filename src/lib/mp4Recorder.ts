@@ -42,35 +42,35 @@ export const QUALITY_PRESETS: Record<RecordingQualityPreset, QualityPresetSpec> 
   long_meeting: {
     id: 'long_meeting',
     label: '2–3 Hr Saver (480p)',
-    shortDesc: '~220 MB/hr · Ideal for long calls',
+    shortDesc: '~240 MB/hr · Ideal for long calls',
     width: 854,
     height: 480,
     fps: 15,
     videoBitsPerSecond: 450_000,
-    audioBitsPerSecond: 48_000,
-    estMbPerHour: 220,
+    audioBitsPerSecond: 96_000,
+    estMbPerHour: 240,
   },
   balanced: {
     id: 'balanced',
     label: 'Standard HD (720p)',
-    shortDesc: '~480 MB/hr · Balanced clarity',
+    shortDesc: '~500 MB/hr · Balanced clarity',
     width: 1280,
     height: 720,
     fps: 24,
     videoBitsPerSecond: 1_000_000,
-    audioBitsPerSecond: 64_000,
-    estMbPerHour: 480,
+    audioBitsPerSecond: 96_000,
+    estMbPerHour: 500,
   },
   high: {
     id: 'high',
     label: 'High Detail (720p30)',
-    shortDesc: '~940 MB/hr · Sharpest screenshare',
+    shortDesc: '~960 MB/hr · Sharpest screenshare',
     width: 1280,
     height: 720,
     fps: 30,
     videoBitsPerSecond: 2_000_000,
-    audioBitsPerSecond: 96_000,
-    estMbPerHour: 940,
+    audioBitsPerSecond: 128_000,
+    estMbPerHour: 960,
   },
 };
 
@@ -168,45 +168,51 @@ export async function startActiveSpeakerCapture(
   }
   const mixedDest = audioCtx.createMediaStreamDestination();
 
-  // Master compressor keeps mixed remote + local voice smooth and prevents clipping
-  const mixCompressor = audioCtx.createDynamicsCompressor();
-  mixCompressor.threshold.value = -16;
-  mixCompressor.knee.value = 20;
-  mixCompressor.ratio.value = 3;
-  mixCompressor.attack.value = 0.004;
-  mixCompressor.release.value = 0.16;
-  mixCompressor.connect(mixedDest);
+  // Gentle safety limiter prevents digital clipping when remote & local speak together
+  // without pumping or ducking remote meeting audio
+  const masterLimiter = audioCtx.createDynamicsCompressor();
+  masterLimiter.threshold.value = -2;
+  masterLimiter.knee.value = 6;
+  masterLimiter.ratio.value = 4;
+  masterLimiter.attack.value = 0.002;
+  masterLimiter.release.value = 0.12;
+  masterLimiter.connect(mixedDest);
 
-  // Subtle silent oscillator keeps MediaStream audio track active even when mic is toggled mid-call
-  const keepaliveOsc = audioCtx.createOscillator();
-  const keepaliveGain = audioCtx.createGain();
-  keepaliveOsc.frequency.value = 440;
-  keepaliveGain.gain.value = 0.00001;
-  keepaliveOsc.connect(keepaliveGain);
-  keepaliveGain.connect(mixCompressor);
-  keepaliveOsc.start();
+  // True zero-signal silent keepalive keeps MediaStream audio active when toggling mic live
+  const silentKeepalive = audioCtx.createConstantSource();
+  silentKeepalive.offset.value = 0;
+  const silentGain = audioCtx.createGain();
+  silentGain.gain.value = 0;
+  silentKeepalive.connect(silentGain);
+  silentGain.connect(masterLimiter);
+  silentKeepalive.start();
 
+  // Remote meeting audio: passed cleanly & un-gated so every participant is heard naturally
   let remoteAnalyser: AnalyserNode | null = null;
   if (displayStream && displayStream.getAudioTracks().length > 0) {
     const remoteSource = audioCtx.createMediaStreamSource(
       new MediaStream(displayStream.getAudioTracks())
     );
+    const remoteUnityGain = audioCtx.createGain();
+    remoteUnityGain.gain.value = 1.0;
     remoteAnalyser = audioCtx.createAnalyser();
     remoteAnalyser.fftSize = 256;
-    remoteSource.connect(remoteAnalyser);
-    remoteSource.connect(mixCompressor);
+    remoteSource.connect(remoteUnityGain);
+    remoteUnityGain.connect(remoteAnalyser);
+    remoteUnityGain.connect(masterLimiter);
   }
 
-  // Microphone DSP Noise-Cancellation Pipeline (can be attached initially or live mid-recording)
+  // Local Microphone Studio Vocal Chain:
+  // Relies on browser AEC + neural NoiseSuppression, plus gentle sub-rumble cut & soft expander
+  // (never mutes to 0 so voice consonants & soft words are NEVER chopped off)
   let localRawAnalyser: AnalyserNode | null = null;
   let localOutAnalyser: AnalyserNode | null = null;
   let micHighPass: BiquadFilterNode | null = null;
   let micLowPass: BiquadFilterNode | null = null;
-  let micRoomNotch: BiquadFilterNode | null = null;
-  let micNoiseGateGain: GainNode | null = null;
+  let micSoftExpanderGain: GainNode | null = null;
   let micMuteGain: GainNode | null = null;
-  let adaptiveNoiseFloor = 0.01;
-  let gateOpenRatio = 0;
+  let adaptiveNoiseFloor = 0.004;
+  let holdUntilMs = 0;
 
   const attachMicPipeline = (stream: MediaStream) => {
     if (localOutAnalyser || stream.getAudioTracks().length === 0) return;
@@ -215,57 +221,48 @@ export async function startActiveSpeakerCapture(
       new MediaStream(stream.getAudioTracks())
     );
 
-    // Pre-gate speech-band analyser for accurate voice activity detection
     localRawAnalyser = audioCtx.createAnalyser();
     localRawAnalyser.fftSize = 256;
 
-    // 1. High-pass filter cuts ceiling fan / AC rumble / desk thumps below 110Hz
+    // Cut low ceiling-fan / AC rumble (< 80Hz) while preserving full vocal body
     micHighPass = audioCtx.createBiquadFilter();
     micHighPass.type = 'highpass';
-    micHighPass.frequency.value = currentNoiseCancel ? 110 : 20;
-    micHighPass.Q.value = 0.8;
+    micHighPass.frequency.value = currentNoiseCancel ? 80 : 20;
+    micHighPass.Q.value = 0.7;
 
-    // 2. Gentle low-cut reduces boxy 280Hz room echo
-    micRoomNotch = audioCtx.createBiquadFilter();
-    micRoomNotch.type = 'peaking';
-    micRoomNotch.frequency.value = 280;
-    micRoomNotch.Q.value = 1.1;
-    micRoomNotch.gain.value = currentNoiseCancel ? -2.8 : 0;
-
-    // 3. Low-pass filter trims distant hiss & fan air turbulence above 7.2kHz
+    // Trim upper hiss (> 10.5kHz) without dulling speech clarity
     micLowPass = audioCtx.createBiquadFilter();
     micLowPass.type = 'lowpass';
-    micLowPass.frequency.value = currentNoiseCancel ? 7200 : 18000;
+    micLowPass.frequency.value = currentNoiseCancel ? 10500 : 18000;
     micLowPass.Q.value = 0.7;
 
-    // 4. Voice dynamics leveling
+    // Gentle vocal leveling
     const micCompressor = audioCtx.createDynamicsCompressor();
-    micCompressor.threshold.value = -24;
-    micCompressor.knee.value = 18;
-    micCompressor.ratio.value = 3.5;
-    micCompressor.attack.value = 0.005;
-    micCompressor.release.value = 0.15;
+    micCompressor.threshold.value = -22;
+    micCompressor.knee.value = 16;
+    micCompressor.ratio.value = 2.6;
+    micCompressor.attack.value = 0.004;
+    micCompressor.release.value = 0.16;
 
-    // 5. Adaptive smooth noise gate (suppresses steady fan/ambient noise between words)
-    micNoiseGateGain = audioCtx.createGain();
-    micNoiseGateGain.gain.value = currentNoiseCancel ? 0 : 1;
+    // Transparent soft expander (attenuates quiet background hum to 0.30, NEVER cuts to 0)
+    micSoftExpanderGain = audioCtx.createGain();
+    micSoftExpanderGain.gain.value = 1.0;
 
-    // 6. Smooth live mute/unmute toggle gain (no clicks or pops)
+    // Smooth click-free mute/unmute toggle
     micMuteGain = audioCtx.createGain();
-    micMuteGain.gain.value = currentMicEnabled ? 1 : 0;
+    micMuteGain.gain.value = currentMicEnabled ? 1.0 : 0.0;
 
     localOutAnalyser = audioCtx.createAnalyser();
     localOutAnalyser.fftSize = 256;
 
     localSource.connect(micHighPass);
-    micHighPass.connect(micRoomNotch);
-    micRoomNotch.connect(micLowPass);
+    micHighPass.connect(micLowPass);
     micLowPass.connect(localRawAnalyser);
     micLowPass.connect(micCompressor);
-    micCompressor.connect(micNoiseGateGain);
-    micNoiseGateGain.connect(micMuteGain);
+    micCompressor.connect(micSoftExpanderGain);
+    micSoftExpanderGain.connect(micMuteGain);
     micMuteGain.connect(localOutAnalyser);
-    micMuteGain.connect(mixCompressor);
+    micMuteGain.connect(masterLimiter);
   };
 
   if (activeMicStream && activeMicStream.getAudioTracks().length > 0) {
@@ -289,23 +286,6 @@ export async function startActiveSpeakerCapture(
     return Math.sqrt(sum / buf.length);
   };
 
-  // Measures energy specifically in the human voice frequency band (200Hz - 3800Hz)
-  const computeSpeechEnergy = (analyser: AnalyserNode | null): number => {
-    if (!analyser) return 0;
-    const freq = new Uint8Array(analyser.frequencyBinCount);
-    analyser.getByteFrequencyData(freq);
-    const binHz = audioCtx.sampleRate / analyser.fftSize;
-    const startBin = Math.max(1, Math.floor(200 / binHz));
-    const endBin = Math.min(freq.length - 1, Math.ceil(3800 / binHz));
-    let sum = 0;
-    let count = 0;
-    for (let i = startBin; i <= endBin; i++) {
-      sum += freq[i] / 255;
-      count++;
-    }
-    return count > 0 ? sum / count : 0;
-  };
-
   const getWaveformBars = (): number[] => {
     const buf = new Uint8Array(combinedAnalyser.frequencyBinCount);
     combinedAnalyser.getByteFrequencyData(buf);
@@ -318,7 +298,6 @@ export async function startActiveSpeakerCapture(
     return bars;
   };
 
-  // Acquire screen WakeLock so laptops/phones stay awake during long calls
   let wakeLock: { release: () => Promise<void> } | null = null;
   const requestWakeLock = async () => {
     try {
@@ -334,7 +313,6 @@ export async function startActiveSpeakerCapture(
   };
   await requestWakeLock();
 
-  // Register MediaSession metadata so mobile PWA recording stays prioritized during app switches
   const mediaSession =
     typeof navigator !== 'undefined' && 'mediaSession' in navigator
       ? navigator.mediaSession
@@ -348,11 +326,10 @@ export async function startActiveSpeakerCapture(
       });
       mediaSession.playbackState = 'playing';
     } catch {
-      // Ignore unsupported MediaSession environments
+      // Ignore
     }
   }
 
-  // Zero-copy direct track mode when full_stage + displayStream + no camera PiP
   const useDirectDisplayTrack =
     Boolean(displayStream && displayStream.getVideoTracks().length > 0) &&
     currentFramingMode === 'full_stage' &&
@@ -399,7 +376,6 @@ export async function startActiveSpeakerCapture(
     }
   };
 
-  // Emit encrypted chunks every 5s and drop from JS heap to sustain 2-3 hours cleanly
   recorder.start(5000);
 
   let stopped = false;
@@ -408,7 +384,6 @@ export async function startActiveSpeakerCapture(
   let lastTelemetryMs = 0;
   let autoStopTriggered = false;
 
-  // Flush buffered audio/video immediately if user switches apps or backgrounds browser on mobile
   const handleVisibilityOrHide = () => {
     if (stopped) return;
     if (document.visibilityState === 'hidden') {
@@ -416,7 +391,7 @@ export async function startActiveSpeakerCapture(
         try {
           recorder.requestData();
         } catch {
-          // Ignore if state transitioned
+          // Ignore
         }
       }
     } else {
@@ -459,45 +434,45 @@ export async function startActiveSpeakerCapture(
     prevFrameData = new Uint8ClampedArray(frame);
   };
 
-  const updateNoiseGate = () => {
-    if (!micNoiseGateGain || !localRawAnalyser) return;
-    const now = audioCtx.currentTime;
-    if (!currentNoiseCancel) {
-      gateOpenRatio = 1;
-      micNoiseGateGain.gain.setTargetAtTime(1, now, 0.03);
+  const updateSoftExpander = () => {
+    if (!micSoftExpanderGain || !localRawAnalyser) return;
+    const nowCtx = audioCtx.currentTime;
+    if (!currentNoiseCancel || !currentMicEnabled) {
+      micSoftExpanderGain.gain.setTargetAtTime(1.0, nowCtx, 0.03);
       return;
     }
 
-    const speechEnergy = computeSpeechEnergy(localRawAnalyser);
-    // Track ambient baseline slowly when speech isn't surging
-    if (speechEnergy < adaptiveNoiseFloor * 2.1) {
-      adaptiveNoiseFloor = adaptiveNoiseFloor * 0.96 + speechEnergy * 0.04;
-      adaptiveNoiseFloor = Math.max(0.008, Math.min(0.14, adaptiveNoiseFloor));
+    const rms = computeRms(localRawAnalyser);
+    const nowMs = performance.now();
+
+    if (rms < adaptiveNoiseFloor * 1.8) {
+      adaptiveNoiseFloor = adaptiveNoiseFloor * 0.96 + rms * 0.04;
+      adaptiveNoiseFloor = Math.max(0.003, Math.min(0.032, adaptiveNoiseFloor));
     }
 
-    const threshold = Math.max(0.045, adaptiveNoiseFloor * 1.9 + 0.018);
-    if (speechEnergy > threshold) {
-      gateOpenRatio = 1;
-      micNoiseGateGain.gain.setTargetAtTime(1, now, 0.02);
+    const speechThreshold = Math.max(0.01, adaptiveNoiseFloor * 1.65 + 0.004);
+    if (rms >= speechThreshold) {
+      holdUntilMs = nowMs + 450;
+      micSoftExpanderGain.gain.setTargetAtTime(1.0, nowCtx, 0.01);
+    } else if (nowMs < holdUntilMs) {
+      micSoftExpanderGain.gain.setTargetAtTime(1.0, nowCtx, 0.02);
     } else {
-      gateOpenRatio = Math.max(0, gateOpenRatio * 0.85);
-      if (gateOpenRatio < 0.08) {
-        micNoiseGateGain.gain.setTargetAtTime(0, now, 0.14);
-      }
+      // Gently reduce idle background hum to -10dB (0.30) rather than muting to 0
+      micSoftExpanderGain.gain.setTargetAtTime(0.3, nowCtx, 0.16);
     }
   };
 
   const renderFrame = () => {
     if (stopped) return;
 
-    updateNoiseGate();
+    updateSoftExpander();
 
     const remoteLevel = computeRms(remoteAnalyser);
     const localLevel = currentMicEnabled ? computeRms(localOutAnalyser) : 0;
     const activeSpeaker: 'remote' | 'local' | 'idle' =
-      remoteLevel > 0.022 && remoteLevel >= localLevel * 0.9
+      remoteLevel > 0.018 && remoteLevel >= localLevel * 0.9
         ? 'remote'
-        : localLevel > 0.022
+        : localLevel > 0.018
         ? 'local'
         : 'idle';
 
@@ -510,7 +485,7 @@ export async function startActiveSpeakerCapture(
 
     const bars = getWaveformBars();
 
-    ctx.fillStyle = '#0B0F17';
+    ctx.fillStyle = '#04060B';
     ctx.fillRect(0, 0, width, height);
 
     const primaryVideo =
@@ -552,14 +527,14 @@ export async function startActiveSpeakerCapture(
       }
 
       if (activeSpeaker !== 'idle') {
-        ctx.strokeStyle = activeSpeaker === 'local' ? '#22C55E' : '#3B82F6';
+        ctx.strokeStyle = activeSpeaker === 'local' ? '#22C55E' : '#2563EB';
         ctx.lineWidth = 4;
         ctx.strokeRect(2, 2, width - 4, height - 4);
       }
     } else {
-      ctx.fillStyle = '#0F172A';
+      ctx.fillStyle = '#091022';
       ctx.fillRect(48, 48, width - 96, height - 96);
-      ctx.strokeStyle = activeSpeaker !== 'idle' ? '#3B82F6' : '#1E293B';
+      ctx.strokeStyle = activeSpeaker !== 'idle' ? '#2563EB' : '#162342';
       ctx.lineWidth = 2;
       ctx.strokeRect(48, 48, width - 96, height - 96);
 
@@ -583,7 +558,7 @@ export async function startActiveSpeakerCapture(
       const baseY = height * 0.74;
       for (let i = 0; i < bars.length; i++) {
         const barH = Math.max(10, Math.round(bars[i] * (height * 0.2)));
-        ctx.fillStyle = activeSpeaker !== 'idle' ? '#3B82F6' : '#334155';
+        ctx.fillStyle = activeSpeaker !== 'idle' ? '#3B82F6' : '#1E293B';
         ctx.fillRect(startX + i * (barWidth + gap), baseY - barH, barWidth, barH);
       }
     }
@@ -599,7 +574,7 @@ export async function startActiveSpeakerCapture(
       ctx.clip();
       ctx.drawImage(camVideo, pipX, pipY, pipW, pipH);
       ctx.restore();
-      ctx.strokeStyle = activeSpeaker === 'local' ? '#22C55E' : 'rgba(255,255,255,0.28)';
+      ctx.strokeStyle = activeSpeaker === 'local' ? '#22C55E' : 'rgba(59,130,246,0.45)';
       ctx.lineWidth = activeSpeaker === 'local' ? 3 : 1.5;
       ctx.beginPath();
       ctx.roundRect(pipX, pipY, pipW, pipH, 8);
@@ -624,7 +599,6 @@ export async function startActiveSpeakerCapture(
     }
   };
 
-  // Unthrottled Web Worker timer prevents browser from dropping background tab FPS
   const stopTimer = createWorkerTimer(Math.round(1000 / fps), renderFrame);
 
   displayStream?.getVideoTracks().forEach((track) => {
@@ -637,12 +611,15 @@ export async function startActiveSpeakerCapture(
 
   const setMicEnabled = async (enabled: boolean): Promise<boolean> => {
     if (stopped) return currentMicEnabled;
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume().catch(() => {});
+    }
     if (enabled && !activeMicStream) {
       try {
         activeMicStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
-            noiseSuppression: true,
+            noiseSuppression: currentNoiseCancel,
             autoGainControl: true,
             channelCount: 1,
           },
@@ -655,11 +632,20 @@ export async function startActiveSpeakerCapture(
     }
     currentMicEnabled = enabled;
     if (micMuteGain) {
-      micMuteGain.gain.setTargetAtTime(enabled ? 1 : 0, audioCtx.currentTime, 0.025);
+      micMuteGain.gain.setTargetAtTime(enabled ? 1.0 : 0.0, audioCtx.currentTime, 0.02);
     }
     if (activeMicStream) {
       activeMicStream.getAudioTracks().forEach((t) => {
         t.enabled = enabled;
+        if (typeof t.applyConstraints === 'function') {
+          void t
+            .applyConstraints({
+              echoCancellation: true,
+              noiseSuppression: currentNoiseCancel,
+              autoGainControl: true,
+            })
+            .catch(() => {});
+        }
       });
     }
     return currentMicEnabled;
@@ -669,16 +655,26 @@ export async function startActiveSpeakerCapture(
     currentNoiseCancel = enabled;
     const now = audioCtx.currentTime;
     if (micHighPass) {
-      micHighPass.frequency.setTargetAtTime(enabled ? 110 : 20, now, 0.03);
-    }
-    if (micRoomNotch) {
-      micRoomNotch.gain.setTargetAtTime(enabled ? -2.8 : 0, now, 0.03);
+      micHighPass.frequency.setTargetAtTime(enabled ? 80 : 20, now, 0.03);
     }
     if (micLowPass) {
-      micLowPass.frequency.setTargetAtTime(enabled ? 7200 : 18000, now, 0.03);
+      micLowPass.frequency.setTargetAtTime(enabled ? 10500 : 18000, now, 0.03);
     }
-    if (micNoiseGateGain && !enabled) {
-      micNoiseGateGain.gain.setTargetAtTime(1, now, 0.03);
+    if (micSoftExpanderGain && !enabled) {
+      micSoftExpanderGain.gain.setTargetAtTime(1.0, now, 0.03);
+    }
+    if (activeMicStream) {
+      activeMicStream.getAudioTracks().forEach((t) => {
+        if (typeof t.applyConstraints === 'function') {
+          void t
+            .applyConstraints({
+              echoCancellation: true,
+              noiseSuppression: enabled,
+              autoGainControl: true,
+            })
+            .catch(() => {});
+        }
+      });
     }
   };
 
@@ -702,7 +698,7 @@ export async function startActiveSpeakerCapture(
     await chunkChain;
 
     try {
-      keepaliveOsc.stop();
+      silentKeepalive.stop();
     } catch {
       // Ignore
     }

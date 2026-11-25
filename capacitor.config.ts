@@ -4,10 +4,10 @@ const config: CapacitorConfig = {
   appId: 'app.cadencemeet.recorder',
   appName: 'Cadence Meet',
   webDir: 'dist',
-  backgroundColor: '#090D16',
+  backgroundColor: '#04060B',
   android: {
     allowMixedContent: false,
-    backgroundColor: '#090D16',
+    backgroundColor: '#04060B',
     captureInput: true,
     webContentsDebuggingEnabled: false,
   },

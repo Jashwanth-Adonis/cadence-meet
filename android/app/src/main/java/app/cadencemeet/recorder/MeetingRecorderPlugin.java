@@ -201,6 +201,9 @@ public class MeetingRecorderPlugin extends Plugin {
         ret.put("recordedBytes", MeetingCaptureService.getCurrentRecordedBytes());
         ret.put("micEnabled", MeetingCaptureService.isMicEnabled());
         ret.put("noiseCancelEnabled", MeetingCaptureService.isNoiseCancelEnabled());
+        ret.put("remoteLevel", MeetingCaptureService.getRemoteLevel());
+        ret.put("localLevel", MeetingCaptureService.getLocalLevel());
+        ret.put("remoteAudioDetected", MeetingCaptureService.isRemoteAudioDetected());
         ret.put("lastCompletedPath", MeetingCaptureService.getLastCompletedPath());
         ret.put("lastCompletedMime", "video/mp4");
         ret.put("lastCompletedSizeBytes", MeetingCaptureService.getLastCompletedSizeBytes());

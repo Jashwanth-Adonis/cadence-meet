@@ -76,7 +76,7 @@ export const VaultGate: React.FC<VaultGateProps> = ({ onUnlocked, onVaultReset }
   };
 
   return (
-    <div className="min-h-screen bg-[#090D16] text-slate-100 flex flex-col justify-between p-4 sm:p-6">
+    <div className="min-h-screen bg-[#04060B] text-slate-100 flex flex-col justify-between p-4 sm:p-6">
       <div className="w-full max-w-md mx-auto flex items-center justify-between pt-2">
         <div className="flex items-center gap-2.5">
           <img
@@ -94,7 +94,7 @@ export const VaultGate: React.FC<VaultGateProps> = ({ onUnlocked, onVaultReset }
         </div>
       </div>
 
-      <div className="w-full max-w-md mx-auto bg-[#0F1623] border border-slate-800 rounded-2xl p-6 sm:p-8 my-6">
+      <div className="w-full max-w-md mx-auto bg-[#091022] border border-[#162342] rounded-2xl p-6 sm:p-8 my-6">
         <div className="mb-6">
           <div className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-400 mb-3">
             <ShieldCheck className="w-3.5 h-3.5" />
@@ -134,7 +134,7 @@ export const VaultGate: React.FC<VaultGateProps> = ({ onUnlocked, onVaultReset }
                   }
                 }}
                 placeholder="Enter your passphrase"
-                className="w-full pl-10 pr-3.5 py-2.5 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
+                className="w-full pl-10 pr-3.5 py-2.5 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
                 required
                 minLength={6}
                 autoFocus
@@ -154,7 +154,7 @@ export const VaultGate: React.FC<VaultGateProps> = ({ onUnlocked, onVaultReset }
                   value={confirmPassphrase}
                   onChange={(e) => setConfirmPassphrase(e.target.value)}
                   placeholder="Repeat passphrase"
-                  className="w-full pl-10 pr-3.5 py-2.5 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
+                  className="w-full pl-10 pr-3.5 py-2.5 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
                   required
                   minLength={6}
                   autoFocus
@@ -179,7 +179,7 @@ export const VaultGate: React.FC<VaultGateProps> = ({ onUnlocked, onVaultReset }
           </button>
         </form>
 
-        <div className="mt-5 pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="mt-5 pt-4 border-t border-[#162342] flex flex-wrap items-center justify-between gap-2 text-xs">
           <span className="text-slate-500">Zero accounts · Zero cloud uploads</span>
 
           {!confirmReset ? (
@@ -191,7 +191,7 @@ export const VaultGate: React.FC<VaultGateProps> = ({ onUnlocked, onVaultReset }
               Clear browser cache
             </button>
           ) : (
-            <div className="w-full mt-2 p-3 bg-[#090D16] border border-slate-800 rounded-xl space-y-2">
+            <div className="w-full mt-2 p-3 bg-[#04060B] border border-[#162342] rounded-xl space-y-2">
               <p className="text-xs text-slate-300">
                 Permanently clear all locally stored vaults and recordings on this browser?
               </p>
@@ -208,7 +208,7 @@ export const VaultGate: React.FC<VaultGateProps> = ({ onUnlocked, onVaultReset }
                 <button
                   type="button"
                   onClick={() => setConfirmReset(false)}
-                  className="px-3 py-1.5 bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium rounded-lg hover:bg-slate-700"
+                  className="px-3 py-1.5 bg-[#0F1B35] border border-[#1E2E52] text-slate-200 text-xs font-medium rounded-lg hover:bg-[#16264A]"
                 >
                   Cancel
                 </button>

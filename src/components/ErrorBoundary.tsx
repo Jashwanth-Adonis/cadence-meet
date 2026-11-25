@@ -25,8 +25,8 @@ export class ErrorBoundary extends React.Component<
   override render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-[#090D16] flex items-center justify-center p-6">
-          <div className="max-w-lg w-full bg-[#0F1623] border border-slate-800 rounded-xl p-8">
+        <div className="min-h-screen bg-[#04060B] flex items-center justify-center p-6">
+          <div className="max-w-lg w-full bg-[#091022] border border-[#162342] rounded-xl p-8">
             <div className="flex items-center gap-3 text-red-400 mb-3">
               <AlertTriangle className="w-5 h-5 shrink-0" />
               <h1 className="text-lg font-semibold text-slate-100">Workspace Recovery Required</h1>

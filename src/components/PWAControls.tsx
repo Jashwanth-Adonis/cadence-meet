@@ -44,7 +44,7 @@ export const AndroidApkDownloadButton: React.FC<{ compact?: boolean }> = ({ comp
       <button
         type="button"
         onClick={() => setShowBuildModal(true)}
-        className={`inline-flex items-center gap-1.5 font-medium rounded-lg border border-slate-700 bg-slate-800/80 text-slate-200 hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 ${
+        className={`inline-flex items-center gap-1.5 font-medium rounded-lg border border-[#1E2E52] bg-[#0F1B35]/80 text-slate-200 hover:bg-[#16264A] transition-colors whitespace-nowrap shrink-0 ${
           compact ? 'px-2.5 py-1.5 text-xs min-h-[36px]' : 'px-3.5 py-2 text-xs min-h-[40px]'
         }`}
       >
@@ -54,7 +54,7 @@ export const AndroidApkDownloadButton: React.FC<{ compact?: boolean }> = ({ comp
 
       {showBuildModal && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md rounded-2xl bg-[#0F1623] border border-slate-800 p-6 space-y-4">
+          <div className="w-full max-w-md rounded-2xl bg-[#091022] border border-[#162342] p-6 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Smartphone className="w-4 h-4 text-blue-400" />
@@ -76,7 +76,7 @@ export const AndroidApkDownloadButton: React.FC<{ compact?: boolean }> = ({ comp
               The native Capacitor Android project (with <strong className="text-slate-100">Foreground Service</strong>, <strong className="text-slate-100">MediaProjection</strong> screen picker, and <strong className="text-slate-100">AudioPlaybackCapture</strong> for Google Meet) is ready in <span className="font-mono text-slate-200">/android</span>.
             </p>
 
-            <div className="p-3 bg-[#090D16] border border-slate-800 rounded-xl space-y-2 text-xs">
+            <div className="p-3 bg-[#04060B] border border-[#162342] rounded-xl space-y-2 text-xs">
               <div className="flex items-center gap-1.5 text-slate-200 font-medium">
                 <Terminal className="w-3.5 h-3.5 text-blue-400" />
                 <span>Compile &amp; Enable Direct APK Download</span>
@@ -84,7 +84,7 @@ export const AndroidApkDownloadButton: React.FC<{ compact?: boolean }> = ({ comp
               <p className="text-slate-400 leading-relaxed">
                 Run this once with Android SDK / Java 21 (or trigger the included GitHub Actions workflow) to generate and host <span className="font-mono text-slate-300">public/downloads/cadence-meet.apk</span>:
               </p>
-              <pre className="p-2.5 bg-black/60 border border-slate-800 rounded-lg font-mono text-[11px] text-emerald-300 overflow-x-auto">
+              <pre className="p-2.5 bg-black/60 border border-[#162342] rounded-lg font-mono text-[11px] text-emerald-300 overflow-x-auto">
                 npm run android:apk
               </pre>
               <p className="text-[11px] text-slate-400">
@@ -117,7 +117,7 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
       <button
         type="button"
         onClick={() => void install()}
-        className={`inline-flex items-center gap-1.5 font-medium rounded-lg border border-slate-700 bg-slate-800/80 text-slate-200 hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 ${
+        className={`inline-flex items-center gap-1.5 font-medium rounded-lg border border-[#1E2E52] bg-[#0F1B35]/80 text-slate-200 hover:bg-[#16264A] transition-colors whitespace-nowrap shrink-0 ${
           compact ? 'px-2.5 py-1.5 text-xs min-h-[36px]' : 'px-3 py-1.5 text-xs min-h-[36px]'
         }`}
       >
@@ -133,7 +133,7 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
         <button
           type="button"
           onClick={() => setShowIOSGuide(true)}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800/80 text-slate-200 hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 min-h-[36px]"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-[#1E2E52] bg-[#0F1B35]/80 text-slate-200 hover:bg-[#16264A] transition-colors whitespace-nowrap shrink-0 min-h-[36px]"
         >
           <Share className="w-3.5 h-3.5 text-blue-400" />
           <span>Install</span>
@@ -141,7 +141,7 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
 
         {showIOSGuide && (
           <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-xs p-4">
-            <div className="w-full max-w-sm rounded-2xl bg-[#0F1623] border border-slate-800 p-6 space-y-4">
+            <div className="w-full max-w-sm rounded-2xl bg-[#091022] border border-[#162342] p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="font-display text-base font-semibold text-slate-100">
                   Install Cadence Meet
@@ -182,7 +182,7 @@ export const OfflineIndicator: React.FC = () => {
   if (isOnline) return null;
 
   return (
-    <div className="fixed bottom-20 lg:bottom-4 left-4 z-50 flex items-center gap-2 rounded-lg bg-[#0F1623] text-slate-100 px-3 py-2 text-xs font-medium shadow-md border border-slate-700">
+    <div className="fixed bottom-20 lg:bottom-4 left-4 z-50 flex items-center gap-2 rounded-lg bg-[#091022] text-slate-100 px-3 py-2 text-xs font-medium shadow-md border border-[#1E2E52]">
       <WifiOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
       <span>Offline mode — Local encrypted vault active</span>
     </div>

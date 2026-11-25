@@ -285,7 +285,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             <button
               type="button"
               onClick={() => onSelectMeeting(null)}
-              className="mt-0.5 p-2 bg-[#0F1623] border border-slate-800 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors shrink-0"
+              className="mt-0.5 p-2 bg-[#091022] border border-[#162342] rounded-lg text-slate-400 hover:text-slate-100 hover:bg-[#0F1B35] transition-colors shrink-0"
               aria-label="Back to recordings"
             >
               <ArrowLeft className="w-4 h-4" />
@@ -328,7 +328,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               <button
                 type="button"
                 onClick={() => void handleDownloadEncryptedArchive(selectedMeeting)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium rounded-lg hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-[#0F1B35] border border-[#1E2E52] text-slate-200 text-xs font-medium rounded-lg hover:bg-[#16264A] transition-colors whitespace-nowrap shrink-0"
               >
                 <Shield className="w-3.5 h-3.5" />
                 <span>Export .enc</span>
@@ -339,8 +339,8 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           <div className="lg:col-span-7 space-y-4">
-            <div className="bg-[#0B0F17] border border-slate-800 rounded-xl overflow-hidden">
-              <div className="aspect-video w-full bg-[#070A10] flex items-center justify-center">
+            <div className="bg-[#060B18] border border-[#162342] rounded-xl overflow-hidden">
+              <div className="aspect-video w-full bg-[#03050A] flex items-center justify-center">
                 {videoLoading ? (
                   <div className="text-xs text-slate-300">
                     Decrypting local video recording...
@@ -365,7 +365,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                   </div>
                 )}
               </div>
-              <div className="px-4 py-2.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+              <div className="px-4 py-2.5 border-t border-[#162342]/80 flex items-center justify-between text-[11px] text-slate-400">
                 <span>Recorded Meeting Playback</span>
                 <span className="font-mono tabular-nums">
                   {selectedMeeting.fileSizeBytes > 0
@@ -375,7 +375,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               </div>
             </div>
 
-            <div className="bg-[#0F1623] border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="bg-[#091022] border border-[#162342] rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-xs text-slate-400">Folder:</span>
                 <select
@@ -388,7 +388,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                       selectedMeeting
                     )
                   }
-                  className="px-2.5 py-1.5 text-xs bg-[#090D16] text-slate-200 border border-slate-700 rounded-md focus:outline-none focus:border-blue-500"
+                  className="px-2.5 py-1.5 text-xs bg-[#04060B] text-slate-200 border border-[#1E2E52] rounded-md focus:outline-none focus:border-blue-500"
                 >
                   <option value="">Unfiled</option>
                   {folders.map((f) => (
@@ -412,7 +412,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                   className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium border rounded-md transition-colors ${
                     selectedMeeting.starred
                       ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
-                      : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                      : 'border-[#1E2E52] text-slate-300 hover:bg-[#0F1B35]'
                   }`}
                 >
                   <Star
@@ -427,7 +427,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                   onClick={() =>
                     void setMeetingArchived(uid, selectedMeeting.id, !selectedMeeting.archived)
                   }
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium border border-slate-700 text-slate-300 rounded-md hover:bg-slate-800 transition-colors"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium border border-[#1E2E52] text-slate-300 rounded-md hover:bg-[#0F1B35] transition-colors"
                 >
                   <Archive className="w-3.5 h-3.5" />
                   <span>{selectedMeeting.archived ? 'Restore' : 'Archive'}</span>
@@ -436,7 +436,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             </div>
           </div>
 
-          <div className="lg:col-span-5 bg-[#0F1623] border border-slate-800 rounded-xl p-6 space-y-6">
+          <div className="lg:col-span-5 bg-[#091022] border border-[#162342] rounded-xl p-6 space-y-6">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
@@ -462,7 +462,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                   }
                 }}
                 placeholder="Write meeting notes here..."
-                className="w-full px-3 py-2 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                className="w-full px-3 py-2 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
               />
               <div className="mt-2 flex justify-end">
                 <button
@@ -478,7 +478,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             </div>
 
             {selectedMeeting.payload.bookmarks.length > 0 && (
-              <div className="pt-4 border-t border-slate-800">
+              <div className="pt-4 border-t border-[#162342]">
                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">
                   Timestamp Bookmarks
                 </h2>
@@ -501,7 +501,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             )}
 
             {linkedTasks.length > 0 && (
-              <div className="pt-4 border-t border-slate-800">
+              <div className="pt-4 border-t border-[#162342]">
                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">
                   Linked Tasks ({linkedTasks.length})
                 </h2>
@@ -551,7 +551,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
         <button
           type="button"
           onClick={() => setNewFolderOpen((v) => !v)}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 border border-slate-700 text-slate-100 text-xs font-medium rounded-lg hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 self-start"
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#0F1B35] border border-[#1E2E52] text-slate-100 text-xs font-medium rounded-lg hover:bg-[#16264A] transition-colors whitespace-nowrap shrink-0 self-start"
         >
           <FolderPlus className="w-3.5 h-3.5" />
           <span>New Folder</span>
@@ -561,7 +561,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
       {newFolderOpen && (
         <form
           onSubmit={handleCreateFolder}
-          className="bg-[#0F1623] border border-slate-800 rounded-xl p-4 flex flex-wrap items-end gap-3"
+          className="bg-[#091022] border border-[#162342] rounded-xl p-4 flex flex-wrap items-end gap-3"
         >
           <div className="flex-1 min-w-[200px]">
             <label className="block text-xs font-medium text-slate-300 mb-1">
@@ -572,7 +572,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
               placeholder="e.g. Executive Steering Committee"
-              className="w-full px-3 py-1.5 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+              className="w-full px-3 py-1.5 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
               required
             />
           </div>
@@ -582,7 +582,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               type="color"
               value={newFolderColor}
               onChange={(e) => setNewFolderColor(e.target.value)}
-              className="h-9 w-12 p-1 bg-[#090D16] border border-slate-700 rounded-lg cursor-pointer"
+              className="h-9 w-12 p-1 bg-[#04060B] border border-[#1E2E52] rounded-lg cursor-pointer"
             />
           </div>
           <button
@@ -595,7 +595,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <aside className="lg:col-span-3 bg-[#0F1623] border border-slate-800 rounded-xl p-3 space-y-1">
+        <aside className="lg:col-span-3 bg-[#091022] border border-[#162342] rounded-xl p-3 space-y-1">
           <div className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Folders
           </div>
@@ -605,7 +605,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             className={`w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg transition-colors ${
               folderFilter === 'all'
                 ? 'bg-blue-600 text-white font-medium'
-                : 'text-slate-300 hover:bg-slate-800/70'
+                : 'text-slate-300 hover:bg-[#0F1B35]/70'
             }`}
           >
             <span className="truncate">All Recordings</span>
@@ -617,7 +617,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             className={`w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg transition-colors ${
               folderFilter === 'unfiled'
                 ? 'bg-blue-600 text-white font-medium'
-                : 'text-slate-300 hover:bg-slate-800/70'
+                : 'text-slate-300 hover:bg-[#0F1B35]/70'
             }`}
           >
             <span className="truncate">Unfiled</span>
@@ -637,7 +637,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                   className={`flex-1 min-w-0 flex items-center justify-between px-2.5 py-2 text-xs rounded-lg transition-colors ${
                     active
                       ? 'bg-blue-600 text-white font-medium'
-                      : 'text-slate-300 hover:bg-slate-800/70'
+                      : 'text-slate-300 hover:bg-[#0F1B35]/70'
                   }`}
                 >
                   <span className="flex items-center gap-2 truncate">
@@ -666,7 +666,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
         </aside>
 
         <div className="lg:col-span-9 space-y-4">
-          <div className="bg-[#0F1623] border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="bg-[#091022] border border-[#162342] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex-1 min-w-[220px] relative">
               <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
@@ -674,12 +674,12 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search recordings by title, Meet link, or notes..."
-                className="w-full pl-9 pr-3 py-1.5 text-xs bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                className="w-full pl-9 pr-3 py-1.5 text-xs bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
               />
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="inline-flex items-center p-0.5 bg-[#090D16] border border-slate-800 rounded-lg">
+              <div className="inline-flex items-center p-0.5 bg-[#04060B] border border-[#162342] rounded-lg">
                 {(['active', 'starred', 'archived'] as LogStatusFilter[]).map((tab) => (
                   <button
                     key={tab}
@@ -687,7 +687,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                     onClick={() => setStatusFilter(tab)}
                     className={`px-2.5 py-1 text-xs font-medium rounded-md capitalize transition-colors whitespace-nowrap shrink-0 ${
                       statusFilter === tab
-                        ? 'bg-slate-800 text-slate-100'
+                        ? 'bg-[#0F1B35] text-slate-100'
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
@@ -699,7 +699,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as 'newest' | 'longest')}
-                className="px-2.5 py-1.5 text-xs bg-[#090D16] text-slate-200 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                className="px-2.5 py-1.5 text-xs bg-[#04060B] text-slate-200 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
               >
                 <option value="newest">Newest First</option>
                 <option value="longest">Longest Duration</option>
@@ -708,7 +708,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
           </div>
 
           {selectedIds.size > 0 && (
-            <div className="bg-[#131B2B] border border-slate-700 text-slate-100 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="bg-[#0D1730] border border-[#1E2E52] text-slate-100 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
               <span className="font-medium font-mono tabular-nums">
                 {selectedIds.size} selected
               </span>
@@ -720,7 +720,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                       void handleBulkMoveFolder(e.target.value === 'unfiled' ? '' : e.target.value);
                     }
                   }}
-                  className="px-2.5 py-1 bg-[#090D16] border border-slate-700 text-slate-100 rounded-md"
+                  className="px-2.5 py-1 bg-[#04060B] border border-[#1E2E52] text-slate-100 rounded-md"
                 >
                   <option value="" disabled>
                     Move to folder...
@@ -735,7 +735,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                 <button
                   type="button"
                   onClick={() => void handleBulkArchive(statusFilter !== 'archived')}
-                  className="px-2.5 py-1 bg-slate-800 border border-slate-700 rounded-md hover:bg-slate-700"
+                  className="px-2.5 py-1 bg-[#0F1B35] border border-[#1E2E52] rounded-md hover:bg-[#16264A]"
                 >
                   {statusFilter === 'archived' ? 'Restore' : 'Archive'}
                 </button>
@@ -750,7 +750,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
             </div>
           )}
 
-          <div className="bg-[#0F1623] border border-slate-800 rounded-xl divide-y divide-slate-800/80 overflow-hidden">
+          <div className="bg-[#091022] border border-[#162342] rounded-xl divide-y divide-slate-800/80 overflow-hidden">
             {filteredMeetings.length > 0 ? (
               filteredMeetings.map((m) => {
                 const folder = folderMap.get(m.folderId);
@@ -758,7 +758,7 @@ export const MeetingLogsView: React.FC<MeetingLogsViewProps> = ({
                 return (
                   <div
                     key={m.id}
-                    className="p-4 hover:bg-slate-800/40 transition-colors flex items-start gap-3.5"
+                    className="p-4 hover:bg-[#0F1B35]/40 transition-colors flex items-start gap-3.5"
                   >
                     <input
                       type="checkbox"

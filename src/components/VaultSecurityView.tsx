@@ -98,7 +98,7 @@ export const VaultSecurityView: React.FC<VaultSecurityViewProps> = ({
         <button
           type="button"
           onClick={onLockVault}
-          className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 border border-slate-700 text-slate-100 text-xs font-medium rounded-xl hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 self-start min-h-[42px]"
+          className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-[#0F1B35] border border-[#1E2E52] text-slate-100 text-xs font-medium rounded-xl hover:bg-[#16264A] transition-colors whitespace-nowrap shrink-0 self-start min-h-[42px]"
         >
           <Lock className="w-3.5 h-3.5" />
           <span>Lock Vault Session</span>
@@ -106,7 +106,7 @@ export const VaultSecurityView: React.FC<VaultSecurityViewProps> = ({
       </div>
 
       {/* Cryptographic Parameters Strip */}
-      <div className="grid grid-cols-1 md:grid-cols-3 bg-[#0F1623] border border-slate-800 rounded-2xl divide-y md:divide-y-0 md:divide-x divide-slate-800">
+      <div className="grid grid-cols-1 md:grid-cols-3 bg-[#091022] border border-[#162342] rounded-2xl divide-y md:divide-y-0 md:divide-x divide-[#162342]">
         <div className="p-5">
           <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
             <ShieldCheck className="w-4 h-4 text-blue-400" />
@@ -148,8 +148,8 @@ export const VaultSecurityView: React.FC<VaultSecurityViewProps> = ({
       </div>
 
       {/* Local Encrypted Video Files Table */}
-      <div className="bg-[#0F1623] border border-slate-800 rounded-2xl overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+      <div className="bg-[#091022] border border-[#162342] rounded-2xl overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-[#162342] flex items-center justify-between">
           <h2 className="text-sm font-semibold text-slate-100">
             Encrypted Video Files in This Vault
           </h2>
@@ -170,7 +170,7 @@ export const VaultSecurityView: React.FC<VaultSecurityViewProps> = ({
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-800 text-[11px] font-semibold uppercase tracking-wider text-slate-400 bg-[#0B101B]">
+                <tr className="border-b border-[#162342] text-[11px] font-semibold uppercase tracking-wider text-slate-400 bg-[#060B18]">
                   <th className="py-2.5 px-5">Meeting</th>
                   <th className="py-2.5 px-4">Format</th>
                   <th className="py-2.5 px-4">Size</th>
@@ -178,11 +178,11 @@ export const VaultSecurityView: React.FC<VaultSecurityViewProps> = ({
                   <th className="py-2.5 px-5 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/70 text-xs">
+              <tbody className="divide-y divide-[#162342]/70 text-xs">
                 {scopedEntries.map((entry) => {
                   const meeting = meetingMap.get(entry.meetingId);
                   return (
-                    <tr key={entry.meetingId} className="hover:bg-slate-800/40">
+                    <tr key={entry.meetingId} className="hover:bg-[#0F1B35]/40">
                       <td className="py-3 px-5 font-medium text-slate-100">
                         {meeting?.payload.title ?? entry.meetingId}
                       </td>
@@ -207,7 +207,7 @@ export const VaultSecurityView: React.FC<VaultSecurityViewProps> = ({
                         <button
                           type="button"
                           onClick={() => void handleExportEncrypted(entry)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 border border-slate-700 text-slate-200 rounded-lg hover:bg-slate-700"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#0F1B35] border border-[#1E2E52] text-slate-200 rounded-lg hover:bg-[#16264A]"
                         >
                           <span>Backup .enc</span>
                         </button>

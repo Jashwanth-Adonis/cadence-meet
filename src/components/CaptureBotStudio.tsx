@@ -337,16 +337,40 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
           setIncludeMic(status.micEnabled);
           setNoiseCancel(status.noiseCancelEnabled);
           elapsedRef.current = status.elapsedSec;
+
+          const rLvl = status.remoteLevel ?? 0;
+          const lLvl = status.localLevel ?? 0;
+          const activeSpeaker: 'remote' | 'local' | 'idle' =
+            rLvl > 0.015 && rLvl >= lLvl * 0.85
+              ? 'remote'
+              : lLvl > 0.015
+              ? 'local'
+              : 'idle';
+          const peakLevel = Math.max(rLvl, lLvl);
+
+          if (status.elapsedSec >= 6 && !status.remoteAudioDetected && !status.micEnabled) {
+            setAudioWarning(
+              'No internal Meet audio detected yet — some Android Meet versions block internal AudioPlaybackCapture. Put Meet on Speakerphone and tap "My Voice Mic: ON", or open Meet in Chrome.'
+            );
+          } else if (status.remoteAudioDetected || status.micEnabled) {
+            setAudioWarning('');
+          }
+
           setTelemetry((prev) => ({
             ...prev,
             elapsedSec: status.elapsedSec,
+            remoteLevel: rLvl,
+            localLevel: lLvl,
+            activeSpeaker,
             recordedBytes: status.recordedBytes,
             codecLabel: 'Native H.264 MP4',
             micEnabled: status.micEnabled,
             noiseCancelEnabled: status.noiseCancelEnabled,
-            waveformBars: prev.waveformBars.map((_, idx) =>
-              Math.max(0.14, Math.min(0.95, 0.28 + 0.45 * Math.abs(Math.sin(status.elapsedSec + idx * 0.6))))
-            ),
+            waveformBars: prev.waveformBars.map((_, idx) => {
+              if (peakLevel < 0.008) return 0.1;
+              const shape = 0.55 + 0.45 * Math.sin(status.elapsedSec * 4.2 + idx * 0.7);
+              return Math.max(0.12, Math.min(1, peakLevel * 2.2 * shape));
+            }),
           }));
         } else if (status.lastCompletedPath && !ingestingNativeRef.current) {
           void ingestNativeCompletedFile(
@@ -675,8 +699,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
               echoCancellation: false,
               noiseSuppression: false,
               autoGainControl: false,
-              suppressLocalAudioPlayback: false,
-            } as unknown as MediaTrackConstraints,
+            },
           });
         } catch (dispErr) {
           const msg = dispErr instanceof Error ? dispErr.message : String(dispErr);
@@ -712,7 +735,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
           micStream = await navigator.mediaDevices.getUserMedia({
             audio: {
               echoCancellation: true,
-              noiseSuppression: true,
+              noiseSuppression: noiseCancel,
               autoGainControl: true,
               channelCount: 1,
             },
@@ -1033,7 +1056,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
             Captures Google Meet audio clearly by default, filters fan &amp; background noise, and stores encrypted 2–3 hour sessions locally.
           </p>
         </div>
-        <div className="inline-flex items-center p-1 bg-[#0F1623] border border-slate-800 rounded-xl shrink-0 self-start">
+        <div className="inline-flex items-center p-1 bg-[#091022] border border-[#162342] rounded-xl shrink-0 self-start">
           <button
             type="button"
             disabled={isRecording || saving}
@@ -1062,7 +1085,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
       </div>
 
       {envCaps.inIframe && tabCaptureBlocked && studioTab === 'live_bot' && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-[#0F1623] border border-slate-800 rounded-2xl text-xs text-slate-300">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-[#091022] border border-[#162342] rounded-2xl text-xs text-slate-300">
           <div className="flex items-start gap-2.5">
             <MonitorPlay className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
             <div>
@@ -1083,7 +1106,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
       )}
 
       {envCaps.nativeAndroid && studioTab === 'live_bot' && (
-        <div className="flex items-start gap-3 p-4 bg-[#0F1623] border border-emerald-800/50 rounded-2xl text-xs text-slate-300 leading-relaxed">
+        <div className="flex items-start gap-3 p-4 bg-[#091022] border border-emerald-800/50 rounded-2xl text-xs text-slate-300 leading-relaxed">
           <Smartphone className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
           <div>
             <span className="font-semibold text-slate-100">Native Android Foreground Mode Active:</span>{' '}
@@ -1093,7 +1116,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
       )}
 
       {envCaps.isMobile && !envCaps.nativeAndroid && studioTab === 'live_bot' && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-[#0F1623] border border-slate-800 rounded-2xl text-xs text-slate-300 leading-relaxed">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-[#091022] border border-[#162342] rounded-2xl text-xs text-slate-300 leading-relaxed">
           <div className="flex items-start gap-2.5">
             <Smartphone className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
             <div>
@@ -1136,7 +1159,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left: Controls */}
-        <div className="lg:col-span-5 bg-[#0F1623] border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-5">
+        <div className="lg:col-span-5 bg-[#091022] border border-[#162342] rounded-2xl p-5 sm:p-6 space-y-5">
           {studioTab === 'live_bot' ? (
             <>
               <form onSubmit={handleValidateOnly} className="space-y-4">
@@ -1154,12 +1177,12 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                       }}
                       disabled={isRecording || saving}
                       placeholder="https://meet.google.com/abc-defg-hij"
-                      className="flex-1 min-w-0 px-3 py-2 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 disabled:opacity-60 min-h-[44px]"
+                      className="flex-1 min-w-0 px-3 py-2 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 disabled:opacity-60 min-h-[44px]"
                     />
                     <button
                       type="submit"
                       disabled={isRecording || saving}
-                      className="px-3.5 py-2 text-xs font-medium text-slate-200 bg-slate-800 border border-slate-700 rounded-xl hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 min-h-[44px]"
+                      className="px-3.5 py-2 text-xs font-medium text-slate-200 bg-[#0F1B35] border border-[#1E2E52] rounded-xl hover:bg-[#16264A] transition-colors whitespace-nowrap shrink-0 min-h-[44px]"
                     >
                       Verify
                     </button>
@@ -1191,7 +1214,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                       onChange={(e) => setMeetingTitle(e.target.value)}
                       disabled={isRecording || saving}
                       placeholder="Weekly Sync"
-                      className="w-full px-3 py-2 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 disabled:opacity-60 min-h-[42px]"
+                      className="w-full px-3 py-2 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 disabled:opacity-60 min-h-[42px]"
                     />
                   </div>
                   <div>
@@ -1204,7 +1227,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                         value={selectedFolderId}
                         onChange={(e) => setSelectedFolderId(e.target.value)}
                         disabled={isRecording || saving}
-                        className="w-full pl-9 pr-3 py-2 text-sm bg-[#090D16] text-slate-100 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[42px]"
+                        className="w-full pl-9 pr-3 py-2 text-sm bg-[#04060B] text-slate-100 border border-[#1E2E52] rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[42px]"
                       >
                         <option value="">Unfiled</option>
                         {folders.map((f) => (
@@ -1233,13 +1256,13 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                     }}
                     disabled={saving}
                     placeholder="Notes saved encrypted with your recording..."
-                    className="w-full px-3 py-2 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                    className="w-full px-3 py-2 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                   />
                 </div>
               </form>
 
               {/* Audio Routing & Noise Cancellation */}
-              <div className="pt-4 border-t border-slate-800 space-y-3">
+              <div className="pt-4 border-t border-[#162342] space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-slate-300">
                     Audio &amp; Noise Cancellation
@@ -1258,7 +1281,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                     className={`inline-flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium border rounded-xl transition-colors min-h-[44px] ${
                       includeMic
                         ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-200'
-                        : 'border-slate-700 bg-[#090D16] text-slate-300 hover:border-slate-600'
+                        : 'border-[#1E2E52] bg-[#04060B] text-slate-300 hover:border-slate-600'
                     }`}
                   >
                     {includeMic ? <Mic className="w-3.5 h-3.5 text-emerald-400" /> : <MicOff className="w-3.5 h-3.5 text-slate-400" />}
@@ -1272,7 +1295,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                     className={`inline-flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium border rounded-xl transition-colors min-h-[44px] ${
                       noiseCancel
                         ? 'border-blue-500/60 bg-blue-500/15 text-blue-200'
-                        : 'border-slate-700 bg-[#090D16] text-slate-400 hover:border-slate-600'
+                        : 'border-[#1E2E52] bg-[#04060B] text-slate-400 hover:border-slate-600'
                     }`}
                   >
                     <Sparkles className={`w-3.5 h-3.5 ${noiseCancel ? 'text-blue-400' : 'text-slate-500'}`} />
@@ -1285,7 +1308,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                 </p>
               </div>
 
-              <div className="pt-4 border-t border-slate-800 space-y-3">
+              <div className="pt-4 border-t border-[#162342] space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-slate-300">
                     Video Quality &amp; Storage
@@ -1310,7 +1333,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                         className={`p-2 text-left border rounded-xl transition-colors ${
                           active
                             ? 'border-blue-500 bg-blue-500/15 text-slate-100'
-                            : 'border-slate-800 bg-[#090D16] hover:border-slate-700 text-slate-300'
+                            : 'border-[#162342] bg-[#04060B] hover:border-[#1E2E52] text-slate-300'
                         }`}
                       >
                         <div className="text-[11px] font-semibold leading-tight">
@@ -1341,7 +1364,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                         className={`p-2.5 text-left border rounded-xl transition-colors ${
                           framingMode === 'full_stage'
                             ? 'border-blue-500 bg-blue-500/15 text-slate-100'
-                            : 'border-slate-800 bg-[#090D16] hover:border-slate-700 text-slate-300'
+                            : 'border-[#162342] bg-[#04060B] hover:border-[#1E2E52] text-slate-300'
                         }`}
                       >
                         <div className="text-xs font-semibold">Full Stage</div>
@@ -1356,7 +1379,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                         className={`p-2.5 text-left border rounded-xl transition-colors ${
                           framingMode === 'smart_focus'
                             ? 'border-blue-500 bg-blue-500/15 text-slate-100'
-                            : 'border-slate-800 bg-[#090D16] hover:border-slate-700 text-slate-300'
+                            : 'border-[#162342] bg-[#04060B] hover:border-[#1E2E52] text-slate-300'
                         }`}
                       >
                         <div className="text-xs font-semibold">Smart Focus</div>
@@ -1373,7 +1396,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                       className={`w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border rounded-xl transition-colors min-h-[40px] ${
                         includeCamPip
                           ? 'border-blue-500 bg-blue-500/15 text-blue-200'
-                          : 'border-slate-800 bg-[#090D16] text-slate-400 hover:border-slate-700'
+                          : 'border-[#162342] bg-[#04060B] text-slate-400 hover:border-[#1E2E52]'
                       }`}
                     >
                       <Camera className="w-3.5 h-3.5" />
@@ -1383,13 +1406,13 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                 )}
 
                 {envCaps.supportsDirectDiskSave && (
-                  <label className="flex items-start gap-2.5 p-3 bg-[#090D16] border border-slate-800 rounded-xl cursor-pointer">
+                  <label className="flex items-start gap-2.5 p-3 bg-[#04060B] border border-[#162342] rounded-xl cursor-pointer">
                     <input
                       type="checkbox"
                       checked={directToDiskMode}
                       disabled={isRecording || saving}
                       onChange={(e) => setDirectToDiskMode(e.target.checked)}
-                      className="mt-0.5 rounded border-slate-700 bg-slate-900 text-blue-500 focus:ring-blue-500"
+                      className="mt-0.5 rounded border-[#1E2E52] bg-slate-900 text-blue-500 focus:ring-blue-500"
                     />
                     <div className="text-xs">
                       <span className="font-semibold text-slate-200 inline-flex items-center gap-1">
@@ -1404,7 +1427,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                 )}
               </div>
 
-              <div className="pt-4 border-t border-slate-800 space-y-2.5">
+              <div className="pt-4 border-t border-[#162342] space-y-2.5">
                 {!isRecording ? (
                   <>
                     {!tabCaptureBlocked && (
@@ -1431,7 +1454,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                       className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl disabled:opacity-50 transition-colors min-h-[46px] ${
                         tabCaptureBlocked
                           ? 'bg-blue-600 text-white hover:bg-blue-500'
-                          : 'bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700'
+                          : 'bg-[#0F1B35] border border-[#1E2E52] text-slate-200 hover:bg-[#16264A]'
                       }`}
                     >
                       <Mic className="w-4 h-4" />
@@ -1456,7 +1479,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">
                   Select Meeting or Phone Screen Recording
                 </label>
-                <label className="flex flex-col items-center justify-center border border-dashed border-slate-700 bg-[#090D16] rounded-xl p-6 text-center cursor-pointer hover:border-blue-500 transition-colors min-h-[120px]">
+                <label className="flex flex-col items-center justify-center border border-dashed border-[#1E2E52] bg-[#04060B] rounded-xl p-6 text-center cursor-pointer hover:border-blue-500 transition-colors min-h-[120px]">
                   <Upload className="w-5 h-5 text-slate-400 mb-2" />
                   <span className="text-sm font-medium text-slate-200">
                     {importedFile ? importedFile.name : 'Choose MP4, WebM, MOV, or Audio'}
@@ -1486,7 +1509,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                   onChange={(e) => setMeetingTitle(e.target.value)}
                   disabled={saving}
                   placeholder="e.g. Client Call Recording"
-                  className="w-full px-3 py-2 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
+                  className="w-full px-3 py-2 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
                 />
               </div>
 
@@ -1498,7 +1521,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                   value={selectedFolderId}
                   onChange={(e) => setSelectedFolderId(e.target.value)}
                   disabled={saving}
-                  className="w-full px-3 py-2 text-sm bg-[#090D16] text-slate-100 border border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
+                  className="w-full px-3 py-2 text-sm bg-[#04060B] text-slate-100 border border-[#1E2E52] rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 min-h-[44px]"
                 >
                   <option value="">Unfiled Recordings</option>
                   {folders.map((f) => (
@@ -1523,8 +1546,8 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
 
         {/* Right: Dark Broadcast Viewport & Completed Video Preview */}
         <div className="lg:col-span-7 space-y-4">
-          <div className="bg-[#0B0F17] border border-slate-800 rounded-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/80 text-xs text-slate-300">
+          <div className="bg-[#060B18] border border-[#162342] rounded-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-[#162342]/80 text-xs text-slate-300">
               <div className="flex items-center gap-2.5 min-w-0">
                 {isRecording ? (
                   <span className="inline-flex items-center gap-1.5 text-red-400 font-medium shrink-0">
@@ -1555,7 +1578,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
               </div>
             </div>
 
-            <div className="aspect-video w-full bg-[#070A10] relative flex items-center justify-center">
+            <div className="aspect-video w-full bg-[#03050A] relative flex items-center justify-center">
               <div
                 ref={previewContainerRef}
                 className={`w-full h-full ${isRecording && !isNativeRecording ? 'block' : 'hidden'}`}
@@ -1598,7 +1621,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
               )}
               {!isRecording && !saving && !lastCompleted && (
                 <div className="text-center px-6 max-w-md">
-                  <div className="w-11 h-11 rounded-xl bg-slate-800/80 border border-slate-700/80 flex items-center justify-center mx-auto mb-3 text-slate-300">
+                  <div className="w-11 h-11 rounded-xl bg-[#0F1B35]/80 border border-[#1E2E52]/80 flex items-center justify-center mx-auto mb-3 text-slate-300">
                     <Video className="w-5 h-5" />
                   </div>
                   <p className="text-sm font-medium text-slate-200">
@@ -1620,7 +1643,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
               )}
             </div>
 
-            <div className="px-4 py-3 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="px-4 py-3 border-t border-[#162342]/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="flex items-end gap-0.5 h-5">
                   {telemetry.waveformBars.map((bar, idx) => (
@@ -1661,11 +1684,11 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                     value={bookmarkInput}
                     onChange={(e) => setBookmarkInput(e.target.value)}
                     placeholder="Timestamp note..."
-                    className="px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-700 text-slate-100 placeholder:text-slate-500 rounded-lg focus:outline-none focus:border-blue-500 min-h-[34px]"
+                    className="px-2.5 py-1.5 text-xs bg-slate-900 border border-[#1E2E52] text-slate-100 placeholder:text-slate-500 rounded-lg focus:outline-none focus:border-blue-500 min-h-[34px]"
                   />
                   <button
                     type="submit"
-                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded-lg hover:bg-slate-700 whitespace-nowrap shrink-0 min-h-[34px]"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-[#0F1B35] text-slate-200 border border-[#1E2E52] rounded-lg hover:bg-[#16264A] whitespace-nowrap shrink-0 min-h-[34px]"
                   >
                     <BookmarkPlus className="w-3.5 h-3.5" />
                     Mark
@@ -1676,7 +1699,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
           </div>
 
           {bookmarks.length > 0 && (
-            <div className="bg-[#0F1623] border border-slate-800 rounded-2xl p-4">
+            <div className="bg-[#091022] border border-[#162342] rounded-2xl p-4">
               <div className="text-xs font-semibold text-slate-300 mb-2">
                 Session Bookmarks ({bookmarks.length})
               </div>
@@ -1694,7 +1717,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
           )}
 
           {lastCompleted && !saving && (
-            <div className="bg-[#0F1623] border border-slate-800 rounded-2xl p-6 space-y-4">
+            <div className="bg-[#091022] border border-[#162342] rounded-2xl p-6 space-y-4">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold mb-1">
@@ -1736,7 +1759,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
                 <button
                   type="button"
                   onClick={() => onOpenMeeting(lastCompleted.meetingId)}
-                  className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 border border-slate-700 text-slate-100 text-xs font-medium rounded-xl hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 min-h-[42px]"
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-[#0F1B35] border border-[#1E2E52] text-slate-100 text-xs font-medium rounded-xl hover:bg-[#16264A] transition-colors whitespace-nowrap shrink-0 min-h-[42px]"
                 >
                   <span>Open in Meeting Logs</span>
                   <ArrowRight className="w-3.5 h-3.5" />

@@ -146,7 +146,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
       </div>
 
       {/* 4-column Summary Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#0F1623] border border-slate-800 rounded-xl divide-y sm:divide-y-0 sm:divide-x divide-slate-800">
+      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#091022] border border-[#162342] rounded-xl divide-y sm:divide-y-0 sm:divide-x divide-[#162342]">
         <div className="p-4">
           <div className="text-xs text-slate-400">Total Action Items</div>
           <div className="mt-1 font-mono tabular-nums text-2xl font-semibold text-slate-100">
@@ -176,7 +176,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
       {showNewForm && (
         <form
           onSubmit={handleCreateTask}
-          className="bg-[#0F1623] border border-slate-800 rounded-xl p-5 space-y-4"
+          className="bg-[#091022] border border-[#162342] rounded-xl p-5 space-y-4"
         >
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="sm:col-span-2">
@@ -186,7 +186,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
                 placeholder="e.g. Finalize Q4 API security review"
-                className="w-full px-3 py-1.5 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                className="w-full px-3 py-1.5 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
                 required
               />
             </div>
@@ -197,7 +197,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
                 value={newAssignee}
                 onChange={(e) => setNewAssignee(e.target.value)}
                 placeholder="Name or team"
-                className="w-full px-3 py-1.5 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                className="w-full px-3 py-1.5 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
               />
             </div>
             <div>
@@ -205,7 +205,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
               <select
                 value={newPriority}
                 onChange={(e) => setNewPriority(e.target.value as TaskPriority)}
-                className="w-full px-3 py-1.5 text-sm bg-[#090D16] text-slate-100 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                className="w-full px-3 py-1.5 text-sm bg-[#04060B] text-slate-100 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -222,7 +222,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
                 type="date"
                 value={newDueDate}
                 onChange={(e) => setNewDueDate(e.target.value)}
-                className="w-full px-3 py-1.5 text-sm bg-[#090D16] text-slate-100 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                className="w-full px-3 py-1.5 text-sm bg-[#04060B] text-slate-100 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
               />
             </div>
             <div>
@@ -230,7 +230,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
               <select
                 value={newFolderId}
                 onChange={(e) => setNewFolderId(e.target.value)}
-                className="w-full px-3 py-1.5 text-sm bg-[#090D16] text-slate-100 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                className="w-full px-3 py-1.5 text-sm bg-[#04060B] text-slate-100 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
               >
                 <option value="">All / General</option>
                 {folders.map((f) => (
@@ -247,7 +247,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
                 value={newDescription}
                 onChange={(e) => setNewDescription(e.target.value)}
                 placeholder="Context or deliverable details"
-                className="w-full px-3 py-1.5 text-sm bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                className="w-full px-3 py-1.5 text-sm bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>
@@ -271,7 +271,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
       )}
 
       {/* Filter & View Toolbar */}
-      <div className="bg-[#0F1623] border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
+      <div className="bg-[#091022] border border-[#162342] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex-1 min-w-[220px] relative">
           <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -279,7 +279,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Filter tasks by title, assignee, or meeting..."
-            className="w-full pl-9 pr-3 py-1.5 text-xs bg-[#090D16] text-slate-100 placeholder:text-slate-500 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+            className="w-full pl-9 pr-3 py-1.5 text-xs bg-[#04060B] text-slate-100 placeholder:text-slate-500 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
           />
         </div>
 
@@ -287,7 +287,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
           <select
             value={priorityFilter}
             onChange={(e) => setPriorityFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs bg-[#090D16] text-slate-200 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+            className="px-2.5 py-1.5 text-xs bg-[#04060B] text-slate-200 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
           >
             <option value="all">All Priorities</option>
             <option value="urgent">Urgent</option>
@@ -299,7 +299,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
           <select
             value={folderFilter}
             onChange={(e) => setFolderFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs bg-[#090D16] text-slate-200 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+            className="px-2.5 py-1.5 text-xs bg-[#04060B] text-slate-200 border border-[#1E2E52] rounded-lg focus:outline-none focus:border-blue-500"
           >
             <option value="all">All Folders</option>
             {folders.map((f) => (
@@ -309,13 +309,13 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
             ))}
           </select>
 
-          <div className="inline-flex items-center p-0.5 bg-[#090D16] border border-slate-800 rounded-lg">
+          <div className="inline-flex items-center p-0.5 bg-[#04060B] border border-[#162342] rounded-lg">
             <button
               type="button"
               onClick={() => setViewMode('board')}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 viewMode === 'board'
-                  ? 'bg-slate-800 text-slate-100'
+                  ? 'bg-[#0F1B35] text-slate-100'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
@@ -326,7 +326,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
               onClick={() => setViewMode('table')}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 viewMode === 'table'
-                  ? 'bg-slate-800 text-slate-100'
+                  ? 'bg-[#0F1B35] text-slate-100'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
@@ -337,7 +337,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
       </div>
 
       {filteredTasks.length === 0 ? (
-        <div className="bg-[#0F1623] border border-slate-800 rounded-xl py-14 px-6 text-center">
+        <div className="bg-[#091022] border border-[#162342] rounded-xl py-14 px-6 text-center">
           <ListChecks className="w-7 h-7 text-slate-600 mx-auto mb-3" />
           <p className="text-sm font-medium text-slate-200">No project tasks yet</p>
           <p className="text-xs text-slate-400 mt-1">
@@ -351,7 +351,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
             return (
               <div
                 key={col.id}
-                className="bg-[#0B101B] border border-slate-800 rounded-xl p-3 space-y-2.5"
+                className="bg-[#060B18] border border-[#162342] rounded-xl p-3 space-y-2.5"
               >
                 <div className="flex items-center justify-between px-1 py-1">
                   <span className="text-xs font-semibold text-slate-200">{col.label}</span>
@@ -366,7 +366,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
                   return (
                     <div
                       key={task.id}
-                      className="bg-[#131B2B] border border-slate-800 rounded-lg p-3.5 space-y-2.5"
+                      className="bg-[#0D1730] border border-[#162342] rounded-lg p-3.5 space-y-2.5"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <h3 className="text-sm font-medium text-slate-100 leading-snug">
@@ -408,7 +408,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
                           onClick={() =>
                             onJumpToMeetingTimestamp(sourceMeeting.id, task.timestampSec)
                           }
-                          className="w-full flex items-center justify-between px-2 py-1.5 bg-[#090D16] hover:bg-slate-800 border border-slate-800 rounded-md text-[11px] text-slate-300 transition-colors"
+                          className="w-full flex items-center justify-between px-2 py-1.5 bg-[#04060B] hover:bg-[#0F1B35] border border-[#162342] rounded-md text-[11px] text-slate-300 transition-colors"
                         >
                           <span className="truncate flex items-center gap-1.5">
                             <Play className="w-2.5 h-2.5 text-blue-400 fill-current shrink-0" />
@@ -420,13 +420,13 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
                         </button>
                       )}
 
-                      <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+                      <div className="pt-2 border-t border-[#162342] flex items-center justify-between gap-2">
                         <select
                           value={task.status}
                           onChange={(e) =>
                             void updateTaskStatus(uid, task.id, e.target.value as TaskStatus)
                           }
-                          className="text-[11px] text-slate-200 bg-[#090D16] border border-slate-700 rounded px-2 py-1 focus:outline-none focus:border-blue-500"
+                          className="text-[11px] text-slate-200 bg-[#04060B] border border-[#1E2E52] rounded px-2 py-1 focus:outline-none focus:border-blue-500"
                         >
                           {COLUMNS.map((c) => (
                             <option key={c.id} value={c.id}>
@@ -454,10 +454,10 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
           })}
         </div>
       ) : (
-        <div className="bg-[#0F1623] border border-slate-800 rounded-xl overflow-x-auto">
+        <div className="bg-[#091022] border border-[#162342] rounded-xl overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="border-b border-slate-800 text-[11px] font-semibold uppercase tracking-wider text-slate-400 bg-[#0B101B]">
+              <tr className="border-b border-[#162342] text-[11px] font-semibold uppercase tracking-wider text-slate-400 bg-[#060B18]">
                 <th className="py-2.5 px-4">Task</th>
                 <th className="py-2.5 px-4">Assignee</th>
                 <th className="py-2.5 px-4">Priority</th>
@@ -467,12 +467,12 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
                 <th className="py-2.5 px-4 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/70 text-xs">
+            <tbody className="divide-y divide-[#162342]/70 text-xs">
               {filteredTasks.map((task) => {
                 const priorityMeta = PRIORITY_STYLES[task.priority];
                 const sourceMeeting = meetingMap.get(task.meetingId);
                 return (
-                  <tr key={task.id} className="hover:bg-slate-800/40">
+                  <tr key={task.id} className="hover:bg-[#0F1B35]/40">
                     <td className="py-2.5 px-4 max-w-xs">
                       <div className="font-medium text-slate-100 truncate">{task.payload.title}</div>
                       {task.payload.description && (
@@ -491,7 +491,7 @@ export const ProjectDashboardView: React.FC<ProjectDashboardViewProps> = ({
                         onChange={(e) =>
                           void updateTaskStatus(uid, task.id, e.target.value as TaskStatus)
                         }
-                        className="text-xs bg-[#090D16] text-slate-200 border border-slate-700 rounded px-2 py-1"
+                        className="text-xs bg-[#04060B] text-slate-200 border border-[#1E2E52] rounded px-2 py-1"
                       >
                         {COLUMNS.map((c) => (
                           <option key={c.id} value={c.id}>

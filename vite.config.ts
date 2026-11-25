@@ -19,8 +19,8 @@ export default defineConfig(() => {
           short_name: 'Cadence',
           description:
             'Encrypted meeting recorder with active-speaker framing, long-session stability, and local video vault.',
-          theme_color: '#090D16',
-          background_color: '#090D16',
+          theme_color: '#04060B',
+          background_color: '#04060B',
           display: 'standalone',
           start_url: '/',
           scope: '/',

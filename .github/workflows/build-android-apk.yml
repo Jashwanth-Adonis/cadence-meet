@@ -40,7 +40,7 @@ jobs:
 
       - name: Build Android APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Stage APK for web download
         run: |

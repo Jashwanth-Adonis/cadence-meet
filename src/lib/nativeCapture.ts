@@ -7,6 +7,9 @@ export interface NativeCaptureStatus {
   recordedBytes: number;
   micEnabled: boolean;
   noiseCancelEnabled: boolean;
+  remoteLevel: number;
+  localLevel: number;
+  remoteAudioDetected: boolean;
   lastCompletedPath: string;
   lastCompletedMime: string;
   lastCompletedSizeBytes: number;
