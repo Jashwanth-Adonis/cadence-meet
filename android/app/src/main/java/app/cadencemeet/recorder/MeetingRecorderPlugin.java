@@ -4,8 +4,11 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.media.projection.MediaProjectionManager;
+import android.net.Uri;
 import android.os.Build;
+import android.provider.Settings;
 
 import androidx.activity.result.ActivityResult;
 import androidx.core.content.ContextCompat;
@@ -41,32 +44,69 @@ public class MeetingRecorderPlugin extends Plugin {
     private boolean pendingMicEnabled = false;
     private boolean pendingNoiseCancel = true;
 
+    private boolean hasAudioPermission() {
+        return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                || getPermissionState("audio") == PermissionState.GRANTED;
+    }
+
+    private boolean hasCameraPermission() {
+        return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                || getPermissionState("camera") == PermissionState.GRANTED;
+    }
+
+    private boolean hasNotifPermission() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || ContextCompat.checkSelfPermission(getContext(), Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                || getPermissionState("notifications") == PermissionState.GRANTED;
+    }
+
     @PluginMethod
     public void requestCapturePermissions(PluginCall call) {
-        boolean audioGranted = getPermissionState("audio") == PermissionState.GRANTED;
-        boolean notifGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
-                || getPermissionState("notifications") == PermissionState.GRANTED;
-
-        if (audioGranted && notifGranted) {
-            JSObject ret = new JSObject();
-            ret.put("audio", true);
-            ret.put("camera", getPermissionState("camera") == PermissionState.GRANTED);
-            ret.put("notifications", true);
-            call.resolve(ret);
+        if (!hasAudioPermission()) {
+            requestPermissionForAlias("audio", call, "audioPermCallback");
             return;
         }
-
-        requestAllPermissions(call, "permissionsCallback");
+        if (!hasNotifPermission()) {
+            requestPermissionForAlias("notifications", call, "notifPermCallback");
+            return;
+        }
+        resolvePermissionStatus(call);
     }
 
     @PermissionCallback
-    private void permissionsCallback(PluginCall call) {
+    private void audioPermCallback(PluginCall call) {
+        if (!hasAudioPermission()) {
+            resolvePermissionStatus(call);
+            return;
+        }
+        if (!hasNotifPermission()) {
+            requestPermissionForAlias("notifications", call, "notifPermCallback");
+            return;
+        }
+        resolvePermissionStatus(call);
+    }
+
+    @PermissionCallback
+    private void notifPermCallback(PluginCall call) {
+        resolvePermissionStatus(call);
+    }
+
+    private void resolvePermissionStatus(PluginCall call) {
         JSObject ret = new JSObject();
-        ret.put("audio", getPermissionState("audio") == PermissionState.GRANTED);
-        ret.put("camera", getPermissionState("camera") == PermissionState.GRANTED);
-        ret.put("notifications", Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
-                || getPermissionState("notifications") == PermissionState.GRANTED);
+        ret.put("audio", hasAudioPermission());
+        ret.put("camera", hasCameraPermission());
+        ret.put("notifications", hasNotifPermission());
         call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void openAppSettings(PluginCall call) {
+        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+        Uri uri = Uri.fromParts("package", getContext().getPackageName(), null);
+        intent.setData(uri);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
+        call.resolve();
     }
 
     @PluginMethod
@@ -75,7 +115,7 @@ public class MeetingRecorderPlugin extends Plugin {
             call.reject("A native recording session is already active.");
             return;
         }
-        if (getPermissionState("audio") != PermissionState.GRANTED) {
+        if (!hasAudioPermission()) {
             requestPermissionForAlias("audio", call, "audioBeforeStartCallback");
             return;
         }
@@ -84,8 +124,8 @@ public class MeetingRecorderPlugin extends Plugin {
 
     @PermissionCallback
     private void audioBeforeStartCallback(PluginCall call) {
-        if (getPermissionState("audio") != PermissionState.GRANTED) {
-            call.reject("Microphone/Audio permission is required for Android meeting capture.");
+        if (!hasAudioPermission()) {
+            call.reject("Android Microphone / Audio permission (RECORD_AUDIO) is denied. Enable Microphone in App Settings to record meeting & voice audio.");
             return;
         }
         launchScreenSelector(call);
@@ -204,6 +244,8 @@ public class MeetingRecorderPlugin extends Plugin {
         ret.put("remoteLevel", MeetingCaptureService.getRemoteLevel());
         ret.put("localLevel", MeetingCaptureService.getLocalLevel());
         ret.put("remoteAudioDetected", MeetingCaptureService.isRemoteAudioDetected());
+        ret.put("playbackCaptureReady", MeetingCaptureService.isPlaybackCaptureReady());
+        ret.put("lastAudioError", MeetingCaptureService.getLastAudioError());
         ret.put("lastCompletedPath", MeetingCaptureService.getLastCompletedPath());
         ret.put("lastCompletedMime", "video/mp4");
         ret.put("lastCompletedSizeBytes", MeetingCaptureService.getLastCompletedSizeBytes());

@@ -10,6 +10,8 @@ export interface NativeCaptureStatus {
   remoteLevel: number;
   localLevel: number;
   remoteAudioDetected: boolean;
+  playbackCaptureReady: boolean;
+  lastAudioError: string;
   lastCompletedPath: string;
   lastCompletedMime: string;
   lastCompletedSizeBytes: number;
@@ -39,6 +41,7 @@ interface MeetingRecorderPluginInterface {
   setMicEnabled: (options: { enabled: boolean }) => Promise<{ micEnabled: boolean }>;
   setNoiseCancelEnabled: (options: { enabled: boolean }) => Promise<{ noiseCancelEnabled: boolean }>;
   getCaptureStatus: () => Promise<NativeCaptureStatus>;
+  openAppSettings: () => Promise<void>;
   deleteNativeFile: (options: { filePath: string }) => Promise<void>;
   addListener: (
     eventName: 'captureStopped' | 'captureError',
@@ -81,6 +84,10 @@ export async function setNativeNoiseCancelEnabled(enabled: boolean): Promise<boo
 
 export async function getNativeCaptureStatus(): Promise<NativeCaptureStatus> {
   return MeetingRecorder.getCaptureStatus();
+}
+
+export async function openNativeAppSettings(): Promise<void> {
+  await MeetingRecorder.openAppSettings();
 }
 
 export async function deleteNativeFile(filePath: string): Promise<void> {

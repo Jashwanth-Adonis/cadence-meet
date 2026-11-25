@@ -87,7 +87,7 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": "53f65f16db9091ba6d69c5ef479b96e9"
   }, {
     "url": "index.html",
-    "revision": "9ef5e6fd8aeafcb83811623651d24ce7"
+    "revision": "8f4e73126289f4c2d1796e0c766850f9"
   }, {
     "url": "icon.svg",
     "revision": "baaaf25781e86438f2eaec6b4d65e5a4"
@@ -104,7 +104,7 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "url": "assets/workbox-window.prod.es5-Bd17z0YL.js",
     "revision": null
   }, {
-    "url": "assets/index-D3heMAZ_.js",
+    "url": "assets/index-BH2TWXC_.js",
     "revision": null
   }, {
     "url": "assets/index--65_iW-n.css",

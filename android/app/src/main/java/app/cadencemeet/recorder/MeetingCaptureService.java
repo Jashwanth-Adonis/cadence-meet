@@ -72,6 +72,8 @@ public class MeetingCaptureService extends Service {
     private static volatile float currentRemoteLevel = 0f;
     private static volatile float currentLocalLevel = 0f;
     private static volatile boolean remoteAudioDetected = false;
+    private static volatile boolean playbackCaptureReady = false;
+    private static volatile String lastAudioError = "";
     private static volatile String activeOutputPath = "";
     private static volatile String lastCompletedPath = "";
     private static volatile long lastCompletedSizeBytes = 0L;
@@ -179,6 +181,14 @@ public class MeetingCaptureService extends Service {
 
     public static boolean isRemoteAudioDetected() {
         return remoteAudioDetected;
+    }
+
+    public static boolean isPlaybackCaptureReady() {
+        return playbackCaptureReady;
+    }
+
+    public static String getLastAudioError() {
+        return lastAudioError;
     }
 
     public static int getElapsedSec() {
@@ -304,6 +314,8 @@ public class MeetingCaptureService extends Service {
             currentRemoteLevel = 0f;
             currentLocalLevel = 0f;
             remoteAudioDetected = false;
+            playbackCaptureReady = false;
+            lastAudioError = "";
             startTimeMs = System.currentTimeMillis();
             stopRequested = false;
             recordingActive = true;
@@ -413,6 +425,7 @@ public class MeetingCaptureService extends Service {
         videoFormat.setInteger(MediaFormat.KEY_BIT_RATE, videoBitrate);
         videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
         videoFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2);
+        videoFormat.setInteger(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000);
 
         videoCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
         videoCodec.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -455,56 +468,119 @@ public class MeetingCaptureService extends Service {
     }
 
     private void runPlaybackReader(PcmRingBuffer remoteRing) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            lastAudioError = "Android 10+ required for internal AudioPlaybackCapture.";
+            return;
+        }
 
-        int minBuf = AudioRecord.getMinBufferSize(
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT
-        );
-        int bufferBytes = Math.max(minBuf, FRAME_SAMPLES * 6);
-        AudioRecord playbackRecord = null;
-
+        AudioPlaybackCaptureConfiguration config;
         try {
-            AudioPlaybackCaptureConfiguration config = new AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
+            // Only USAGE_MEDIA, USAGE_GAME, and USAGE_UNKNOWN are supported by AOSP AudioPlaybackCaptureConfiguration.
+            // Passing USAGE_VOICE_COMMUNICATION throws IllegalArgumentException on standard Android builds.
+            config = new AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
                     .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                    .addMatchingUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                    .addMatchingUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING)
-                    .addMatchingUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
                     .addMatchingUsage(AudioAttributes.USAGE_GAME)
                     .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
                     .build();
+        } catch (Exception ex) {
+            lastAudioError = "Playback capture config error: " + ex.getMessage();
+            return;
+        }
 
-            AudioFormat pcmFormat = new AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(SAMPLE_RATE)
-                    .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                    .build();
+        int[] rates = new int[] { SAMPLE_RATE, SAMPLE_RATE, 44100, 44100 };
+        int[] masks = new int[] {
+                AudioFormat.CHANNEL_IN_STEREO,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.CHANNEL_IN_STEREO,
+                AudioFormat.CHANNEL_IN_MONO
+        };
 
-            playbackRecord = new AudioRecord.Builder()
-                    .setAudioFormat(pcmFormat)
-                    .setBufferSizeInBytes(bufferBytes)
-                    .setAudioPlaybackCaptureConfig(config)
-                    .build();
+        AudioRecord playbackRecord = null;
+        int chosenRate = SAMPLE_RATE;
+        int chosenChannels = 2;
 
-            if (playbackRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-                playbackRecord.release();
-                return;
+        for (int idx = 0; idx < rates.length; idx++) {
+            int rate = rates[idx];
+            int mask = masks[idx];
+            int ch = (mask == AudioFormat.CHANNEL_IN_STEREO) ? 2 : 1;
+            int minBuf = AudioRecord.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT);
+            if (minBuf <= 0) continue;
+            int bufferBytes = Math.max(minBuf * 2, FRAME_SAMPLES * ch * 6);
+
+            AudioRecord candidate = null;
+            try {
+                AudioFormat pcmFormat = new AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(rate)
+                        .setChannelMask(mask)
+                        .build();
+
+                candidate = new AudioRecord.Builder()
+                        .setAudioFormat(pcmFormat)
+                        .setBufferSizeInBytes(bufferBytes)
+                        .setAudioPlaybackCaptureConfig(config)
+                        .build();
+
+                if (candidate.getState() == AudioRecord.STATE_INITIALIZED) {
+                    candidate.startRecording();
+                    if (candidate.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+                        playbackRecord = candidate;
+                        chosenRate = rate;
+                        chosenChannels = ch;
+                        break;
+                    }
+                }
+            } catch (Exception ex) {
+                lastAudioError = "Playback AudioRecord init failed: " + ex.getMessage();
             }
-            playbackRecord.startRecording();
-        } catch (Exception ignored) {
-            if (playbackRecord != null) {
-                try { playbackRecord.release(); } catch (Exception ignored2) {}
+            if (candidate != null) {
+                try { candidate.release(); } catch (Exception ignored) {}
+            }
+        }
+
+        if (playbackRecord == null) {
+            playbackCaptureReady = false;
+            if (lastAudioError.isEmpty()) {
+                lastAudioError = "AudioPlaybackCapture could not initialize on this device.";
             }
             return;
         }
 
-        short[] buf = new short[FRAME_SAMPLES];
+        playbackCaptureReady = true;
+        int readSamples = FRAME_SAMPLES * chosenChannels;
+        short[] rawBuf = new short[readSamples];
+        short[] monoBuf = new short[FRAME_SAMPLES];
+        short[] resampledBuf = new short[(FRAME_SAMPLES * 48000) / 44100 + 8];
+
         while (!stopRequested) {
-            int n = playbackRecord.read(buf, 0, FRAME_SAMPLES);
+            int n = playbackRecord.read(rawBuf, 0, readSamples);
             if (n > 0) {
-                remoteRing.write(buf, n);
+                int frames = n / chosenChannels;
+                if (frames <= 0) continue;
+                if (chosenChannels == 2) {
+                    for (int i = 0; i < frames; i++) {
+                        monoBuf[i] = (short) ((rawBuf[i * 2] + rawBuf[i * 2 + 1]) / 2);
+                    }
+                } else {
+                    System.arraycopy(rawBuf, 0, monoBuf, 0, frames);
+                }
+
+                if (chosenRate == SAMPLE_RATE) {
+                    remoteRing.write(monoBuf, frames);
+                } else {
+                    int outFrames = (int) Math.round((frames * (double) SAMPLE_RATE) / chosenRate);
+                    if (outFrames > resampledBuf.length) outFrames = resampledBuf.length;
+                    for (int i = 0; i < outFrames; i++) {
+                        double srcPos = (i * (double) (frames - 1)) / Math.max(1, outFrames - 1);
+                        int i0 = (int) srcPos;
+                        int i1 = Math.min(frames - 1, i0 + 1);
+                        double frac = srcPos - i0;
+                        resampledBuf[i] = (short) Math.round(monoBuf[i0] * (1.0 - frac) + monoBuf[i1] * frac);
+                    }
+                    remoteRing.write(resampledBuf, outFrames);
+                }
             } else if (n < 0) {
+                lastAudioError = "AudioPlaybackCapture read error: " + n;
                 break;
             }
         }
@@ -519,17 +595,22 @@ public class MeetingCaptureService extends Service {
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
         );
-        int bufferBytes = Math.max(minBuf, FRAME_SAMPLES * 6);
+        int bufferBytes = Math.max(minBuf * 2, FRAME_SAMPLES * 6);
 
         AudioRecord micRecord = null;
         NoiseSuppressor noiseSuppressor = null;
         AcousticEchoCanceler echoCanceler = null;
         short[] buf = new short[FRAME_SAMPLES];
 
+        int[] micSources = new int[] {
+                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                MediaRecorder.AudioSource.CAMCORDER,
+                MediaRecorder.AudioSource.DEFAULT
+        };
+
         while (!stopRequested) {
             if (!micEnabled) {
-                // Lazily wait without holding the hardware mic while muted,
-                // preventing audio routing conflicts with the Google Meet app
                 if (micRecord != null) {
                     if (noiseSuppressor != null) { try { noiseSuppressor.release(); } catch (Exception ignored) {} noiseSuppressor = null; }
                     if (echoCanceler != null) { try { echoCanceler.release(); } catch (Exception ignored) {} echoCanceler = null; }
@@ -548,31 +629,37 @@ public class MeetingCaptureService extends Service {
             }
 
             if (micRecord == null) {
-                try {
-                    // Use VOICE_RECOGNITION so Android preserves media speaker routing & clean speech
-                    micRecord = new AudioRecord(
-                            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                            SAMPLE_RATE,
-                            AudioFormat.CHANNEL_IN_MONO,
-                            AudioFormat.ENCODING_PCM_16BIT,
-                            bufferBytes
-                    );
-                    if (micRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-                        micRecord.release();
-                        micRecord = new AudioRecord(
-                                MediaRecorder.AudioSource.MIC,
+                for (int src : micSources) {
+                    AudioRecord candidate = null;
+                    try {
+                        candidate = new AudioRecord(
+                                src,
                                 SAMPLE_RATE,
                                 AudioFormat.CHANNEL_IN_MONO,
                                 AudioFormat.ENCODING_PCM_16BIT,
                                 bufferBytes
                         );
+                        if (candidate.getState() == AudioRecord.STATE_INITIALIZED) {
+                            candidate.startRecording();
+                            if (candidate.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+                                micRecord = candidate;
+                                break;
+                            }
+                        }
+                    } catch (Exception ex) {
+                        lastAudioError = "Mic permission or hardware error: " + ex.getMessage();
                     }
-                    if (micRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-                        micRecord.release();
-                        micRecord = null;
-                        Thread.sleep(200);
-                        continue;
+                    if (candidate != null) {
+                        try { candidate.release(); } catch (Exception ignored) {}
                     }
+                }
+
+                if (micRecord == null) {
+                    try { Thread.sleep(250); } catch (InterruptedException e) { break; }
+                    continue;
+                }
+
+                try {
                     int sessionId = micRecord.getAudioSessionId();
                     if (NoiseSuppressor.isAvailable()) {
                         noiseSuppressor = NoiseSuppressor.create(sessionId);
@@ -582,14 +669,7 @@ public class MeetingCaptureService extends Service {
                         echoCanceler = AcousticEchoCanceler.create(sessionId);
                         if (echoCanceler != null) echoCanceler.setEnabled(true);
                     }
-                    micRecord.startRecording();
                 } catch (Exception ignored) {
-                    if (micRecord != null) {
-                        try { micRecord.release(); } catch (Exception ignored2) {}
-                        micRecord = null;
-                    }
-                    try { Thread.sleep(200); } catch (InterruptedException e) { break; }
-                    continue;
                 }
             }
 
@@ -603,6 +683,13 @@ public class MeetingCaptureService extends Service {
             int n = micRecord.read(buf, 0, FRAME_SAMPLES);
             if (n > 0) {
                 micRing.write(buf, n);
+            } else if (n < 0) {
+                lastAudioError = "Mic AudioRecord read error: " + n;
+                if (noiseSuppressor != null) { try { noiseSuppressor.release(); } catch (Exception ignored) {} noiseSuppressor = null; }
+                if (echoCanceler != null) { try { echoCanceler.release(); } catch (Exception ignored) {} echoCanceler = null; }
+                try { micRecord.stop(); } catch (Exception ignored) {}
+                micRecord.release();
+                micRecord = null;
             }
         }
 
@@ -616,6 +703,7 @@ public class MeetingCaptureService extends Service {
 
     private void drainVideoEncoder(long anchorNs) {
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+        long lastVideoPtsUs = -1L;
         while (true) {
             int outIndex;
             try {
@@ -638,7 +726,12 @@ public class MeetingCaptureService extends Service {
                     if (waitForMuxerStart()) {
                         buf.position(info.offset);
                         buf.limit(info.offset + info.size);
-                        info.presentationTimeUs = Math.max(0L, (System.nanoTime() - anchorNs) / 1000L);
+                        long ptsUs = Math.max(0L, (System.nanoTime() - anchorNs) / 1000L);
+                        if (ptsUs <= lastVideoPtsUs) {
+                            ptsUs = lastVideoPtsUs + 1L;
+                        }
+                        lastVideoPtsUs = ptsUs;
+                        info.presentationTimeUs = ptsUs;
                         synchronized (muxerLock) {
                             if (muxerStarted) {
                                 mediaMuxer.writeSampleData(videoTrackIndex, buf, info);
@@ -694,8 +787,8 @@ public class MeetingCaptureService extends Service {
                 remoteSumSq += r * r;
             }
             double remoteRms = Math.sqrt(remoteSumSq / FRAME_SAMPLES);
-            currentRemoteLevel = (float) Math.min(1.0, remoteRms / 8000.0);
-            if (remoteCount > 0 && remoteRms > 18.0) {
+            currentRemoteLevel = (float) Math.min(1.0, remoteRms / 6000.0);
+            if (remoteCount > 0 && remoteRms > 4.0) {
                 remoteAudioDetected = true;
             }
 

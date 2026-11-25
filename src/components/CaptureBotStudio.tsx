@@ -47,6 +47,7 @@ import {
   deleteNativeFile,
   getNativeCaptureStatus,
   isNativeAndroid,
+  openNativeAppSettings,
   readNativeFileAsBlob,
   requestNativePermissions,
   setNativeMicEnabled,
@@ -348,7 +349,9 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
               : 'idle';
           const peakLevel = Math.max(rLvl, lLvl);
 
-          if (status.elapsedSec >= 6 && !status.remoteAudioDetected && !status.micEnabled) {
+          if (status.lastAudioError && !status.micEnabled) {
+            setAudioWarning(status.lastAudioError);
+          } else if (status.elapsedSec >= 6 && !status.remoteAudioDetected && !status.micEnabled) {
             setAudioWarning(
               'No internal Meet audio detected yet — some Android Meet versions block internal AudioPlaybackCapture. Put Meet on Speakerphone and tap "My Voice Mic: ON", or open Meet in Chrome.'
             );
@@ -619,7 +622,7 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
       try {
         const perms = await requestNativePermissions();
         if (!perms.audio) {
-          setErrorMsg('Microphone & audio capture permission is required by Android to record meeting audio.');
+          setErrorMsg('Android Microphone / Audio permission is required to record meeting audio. Enable Microphone in Android App Settings.');
           return;
         }
         setBookmarks([]);
@@ -635,6 +638,14 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
         setErrorMsg(err instanceof Error ? err.message : 'Native Android screen capture canceled.');
       }
       return;
+    }
+
+    if (envCaps.nativeAndroid && captureSource === 'room_mic_cam') {
+      const perms = await requestNativePermissions();
+      if (!perms.audio) {
+        setErrorMsg('Android Microphone permission is required to record Room Mic & Camera. Enable Microphone in Android App Settings.');
+        return;
+      }
     }
 
     let writable: FileWritable | null = null;
@@ -1151,9 +1162,20 @@ export const CaptureBotStudio: React.FC<CaptureBotStudioProps> = ({
       )}
 
       {errorMsg && (
-        <div className="flex items-start gap-2.5 p-3.5 bg-red-950/60 border border-red-800/70 rounded-xl text-sm text-red-200">
-          <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-          <span>{errorMsg}</span>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3.5 bg-red-950/60 border border-red-800/70 rounded-xl text-sm text-red-200">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <span>{errorMsg}</span>
+          </div>
+          {envCaps.nativeAndroid && errorMsg.toLowerCase().includes('permission') && (
+            <button
+              type="button"
+              onClick={() => void openNativeAppSettings()}
+              className="px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-lg hover:bg-red-500 whitespace-nowrap shrink-0 self-start sm:self-auto"
+            >
+              Open App Permissions
+            </button>
+          )}
         </div>
       )}
 
